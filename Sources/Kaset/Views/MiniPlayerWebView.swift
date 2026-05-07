@@ -336,7 +336,8 @@ final class SingletonPlayerWebView {
         switch strategy {
         case .standard:
             if videoId == previousVideoId {
-                self.logger.debug("Video \(videoId) already loaded, skipping")
+                self.logger.debug("Video \(videoId) already loaded, skipping routing and playing")
+                self.play()
                 return
             }
         case .preferInPlaceWhenSameVideoId:
@@ -347,7 +348,9 @@ final class SingletonPlayerWebView {
             }
         case .forceFullPageWhenSameVideoId:
             if videoId == previousVideoId {
-                self.logger.info("Force full navigation for \(videoId) (DOM/WebView resync)")
+                self.logger.debug("Bypassing forceFullPageWhenSameVideoId for router command execution")
+                self.play()
+                return
             }
         }
 
@@ -369,17 +372,58 @@ final class SingletonPlayerWebView {
             targetVolume: currentVolume
         )
 
-        // Stop current playback first, then load new video
+        // Prefer in-page router navigation when the shell is already loaded.
         let urlToLoad = URL(string: "https://music.youtube.com/watch?v=\(videoId)")!
         webView.evaluateJavaScript("document.querySelector('video')?.pause()") { [weak self] _, _ in
             guard let self, let webView = self.webView else { return }
 
             // Keep the current page's target volume fresh until the new document
             // finishes loading and gets the same value from didFinish.
-            let prepareScript = "window.__kasetTargetVolume = \(currentVolume);"
+            let prepareScript = """
+            window.__kasetTargetVolume = \(currentVolume);
+            window.__kasetAutoplayPending = \(isRestoringPlaybackSession ? "false" : "true");
+            window.__kasetBlockAutoplay = \(isRestoringPlaybackSession ? "true" : "false");
+            """
             webView.evaluateJavaScript(prepareScript, completionHandler: nil)
+            self.navigateViaRouter(videoId: videoId, fallbackURL: urlToLoad)
+        }
+    }
 
-            webView.load(URLRequest(url: urlToLoad))
+    private func navigateViaRouter(videoId: String, fallbackURL: URL) {
+        guard let webView else { return }
+
+        let host = webView.url?.host ?? ""
+        guard host == "music.youtube.com" || host == "www.music.youtube.com" else {
+            self.logger.debug("Router unavailable (host: \(host, privacy: .public)); falling back to full load")
+            webView.load(URLRequest(url: fallbackURL))
+            return
+        }
+
+        let escapedVideoId = videoId
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        let routerScript = """
+        (function() {
+            const app = document.querySelector('ytmusic-app');
+            if (!app || typeof app.resolveCommand !== 'function') return false;
+            try {
+                app.resolveCommand({ watchEndpoint: { videoId: '\(escapedVideoId)' } });
+                return true;
+            } catch (_) {
+                return false;
+            }
+        })();
+        """
+
+        webView.evaluateJavaScript(routerScript) { [weak self] result, _ in
+            guard let self, let webView = self.webView else { return }
+            let didNavigate = result as? Bool ?? false
+            if didNavigate {
+                self.logger.info("Router navigation started for video: \(videoId)")
+            } else {
+                self.logger.info("Router navigation failed for video: \(videoId), using full load")
+                webView.load(URLRequest(url: fallbackURL))
+            }
         }
     }
 
@@ -387,7 +431,10 @@ final class SingletonPlayerWebView {
     /// page's window. Restored sessions suppress autoplay so the reconcile path
     /// resumes at the saved seek rather than at 0s.
     nonisolated static func autoplayIntentScript(isRestoringPlaybackSession: Bool) -> String {
-        "window.__kasetAutoplayPending = \(isRestoringPlaybackSession ? "false" : "true");"
+        """
+        window.__kasetAutoplayPending = \(isRestoringPlaybackSession ? "false" : "true");
+        window.__kasetBlockAutoplay = \(isRestoringPlaybackSession ? "true" : "false");
+        """
     }
 
     nonisolated static func pageBootstrapScript(
@@ -618,6 +665,8 @@ final class SingletonPlayerWebView {
                     }
                 })();
             """
+            SingletonPlayerWebView.shared.setAutoplayBlocked(self.playerService.isPendingRestoredLoadDeferred)
+
             webView.evaluateJavaScript(applyVolumeScript) { result, error in
                 if let error {
                     DiagnosticsLogger.player.error(

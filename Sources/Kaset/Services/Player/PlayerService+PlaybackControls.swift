@@ -136,6 +136,7 @@ extension PlayerService {
 
         if didStartPlayback {
             self.logger.info("Playback confirmed started")
+            self.syncWebQueue()
         }
     }
 
@@ -223,6 +224,22 @@ extension PlayerService {
     /// Resumes playback.
     func resume() async {
         self.logger.debug("Resuming playback")
+
+        if self.isPendingRestoredLoadDeferred {
+            self.clearRestoredPlaybackSessionState()
+            SingletonPlayerWebView.shared.setAutoplayBlocked(false)
+
+            self.showMiniPlayer = false
+            self.state = .loading
+            self.isKasetInitiatedPlayback = true
+
+            if SingletonPlayerWebView.shared.webView != nil {
+                SingletonPlayerWebView.shared.play()
+            } else {
+                await self.evaluatePlayerCommand("play")
+            }
+            return
+        }
 
         guard let pendingPlayVideoId = self.pendingPlayVideoId else {
             self.clearRestoredPlaybackSessionState()
