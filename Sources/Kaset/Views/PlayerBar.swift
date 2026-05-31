@@ -3,7 +3,6 @@ import SwiftUI
 // MARK: - PlayerBar
 
 /// Player bar shown at the bottom of the content area, styled like Apple Music with Liquid Glass.
-@available(macOS 26.0, *)
 struct PlayerBar: View {
     private static let brandAccent = PackageResourceLookup.brandAccent
     private static let compactLayoutThreshold: CGFloat = 980
@@ -35,7 +34,7 @@ struct PlayerBar: View {
     @State private var lastProgressSecond: Int = -1
 
     var body: some View {
-        GlassEffectContainer(spacing: 0) {
+        CompatGlassContainer(spacing: 0) {
             HStack(spacing: 0) {
                 // Left section: Playback controls
                 self.playbackControls
@@ -53,8 +52,8 @@ struct PlayerBar: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 8)
             .frame(height: 52)
-            .glassEffect(.regular.interactive(), in: .capsule)
-            .glassEffectID("playerBar", in: self.playerNamespace)
+            .compatGlass(interactive: true, in: .capsule)
+            .compatGlassID("playerBar", in: self.playerNamespace)
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
@@ -477,7 +476,7 @@ struct PlayerBar: View {
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.pressable)
-            .glassEffectID("playPause", in: self.playerNamespace)
+            .compatGlassID("playPause", in: self.playerNamespace)
             .accessibilityLabel(self.playerService.isPlaying ? String(localized: "Pause") : String(localized: "Play"))
 
             // Next
@@ -706,7 +705,7 @@ struct PlayerBar: View {
                     .foregroundStyle(self.playerService.showLyrics ? .red : .primary.opacity(0.85))
             }
             .buttonStyle(.pressable)
-            .glassEffectID("lyrics", in: self.playerNamespace)
+            .compatGlassID("lyrics", in: self.playerNamespace)
             .accessibilityIdentifier(AccessibilityID.PlayerBar.lyricsButton)
             .accessibilityLabel(String(localized: "Lyrics"))
             .accessibilityValue(self.playerService.showLyrics ? String(localized: "Showing") : String(localized: "Hidden"))
@@ -723,7 +722,7 @@ struct PlayerBar: View {
                     .foregroundStyle(self.playerService.showQueue ? .red : .primary.opacity(0.85))
             }
             .buttonStyle(.pressable)
-            .glassEffectID("queue", in: self.playerNamespace)
+            .compatGlassID("queue", in: self.playerNamespace)
             .accessibilityIdentifier(AccessibilityID.PlayerBar.queueButton)
             .accessibilityLabel(String(localized: "Queue"))
             .accessibilityValue(self.playerService.showQueue ? String(localized: "Showing") : String(localized: "Hidden"))
@@ -737,7 +736,7 @@ struct PlayerBar: View {
                     .foregroundStyle(self.playerService.isMiniPlayerVisible ? .red : .primary.opacity(0.85))
             }
             .buttonStyle(.pressable)
-            .glassEffectID("miniPlayer", in: self.playerNamespace)
+            .compatGlassID("miniPlayer", in: self.playerNamespace)
             .accessibilityIdentifier(AccessibilityID.PlayerBar.miniPlayerButton)
             .accessibilityLabel(self.playerService.isMiniPlayerVisible ? String(localized: "Return to Kaset") : String(localized: "Switch to Mini Player"))
 
@@ -758,7 +757,7 @@ struct PlayerBar: View {
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.pressable)
-            .glassEffectID("video", in: self.playerNamespace)
+            .compatGlassID("video", in: self.playerNamespace)
             .keyboardShortcut("v", modifiers: [.command, .shift])
             .accessibilityIdentifier(AccessibilityID.PlayerBar.videoButton)
             .accessibilityLabel(String(localized: "Video"))
@@ -781,7 +780,6 @@ struct PlayerBar: View {
 
 // MARK: - CompactVisibleActionButtons
 
-@available(macOS 26.0, *)
 private struct CompactVisibleActionButtons: View {
     let playerNamespace: Namespace.ID
 
@@ -836,7 +834,7 @@ private struct CompactVisibleActionButtons: View {
                     .foregroundStyle(self.playerService.showLyrics ? .red : .primary.opacity(0.85))
             }
             .buttonStyle(.pressable)
-            .glassEffectID("compactLyrics", in: self.playerNamespace)
+            .compatGlassID("compactLyrics", in: self.playerNamespace)
             .accessibilityIdentifier(AccessibilityID.PlayerBar.lyricsButton)
             .accessibilityLabel(String(localized: "Lyrics"))
             .accessibilityValue(self.playerService.showLyrics ? String(localized: "Showing") : String(localized: "Hidden"))
@@ -857,7 +855,7 @@ private struct CompactVisibleActionButtons: View {
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.pressable)
-            .glassEffectID("compactVideo", in: self.playerNamespace)
+            .compatGlassID("compactVideo", in: self.playerNamespace)
             .keyboardShortcut("v", modifiers: [.command, .shift])
             .accessibilityIdentifier(AccessibilityID.PlayerBar.videoButton)
             .accessibilityLabel(String(localized: "Video"))
@@ -867,7 +865,6 @@ private struct CompactVisibleActionButtons: View {
     }
 }
 
-@available(macOS 26.0, *)
 #Preview {
     PlayerBar()
         .environment(PlayerService())
