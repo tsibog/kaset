@@ -77,6 +77,10 @@ private final class MockYouTubeWatchPlaybackController: YouTubeWatchPlaybackCont
         self.selectedQuality = level
     }
 
+    func storyboardSpec(expectedVideoId _: String?) async -> String? {
+        nil
+    }
+
     func tearDown() {
         self.tearDownCount += 1
     }
@@ -92,7 +96,12 @@ struct YouTubePlayerServiceTests {
 
     init() {
         self.controller = MockYouTubeWatchPlaybackController()
-        self.sut = YouTubePlayerService(playbackController: self.controller)
+        // Pin the navigate-away pop-out gate ON so the existing pop-out
+        // assertions don't depend on the global SettingsManager.shared state.
+        self.sut = YouTubePlayerService(
+            playbackController: self.controller,
+            shouldPopOutOnNavigateAway: { true }
+        )
     }
 
     @Test("Initial state is empty")
@@ -203,6 +212,82 @@ struct YouTubePlayerServiceTests {
         #expect(self.sut.activeInlineVideoId == "abc")
     }
 
+    @Test("Pop-out disabled: inline disappearance while playing stops instead of floating")
+    func disappearWhilePlayingStopsWhenPopOutDisabled() {
+        let controller = MockYouTubeWatchPlaybackController()
+        let sut = YouTubePlayerService(
+            playbackController: controller,
+            shouldPopOutOnNavigateAway: { false }
+        )
+        sut.play(video: MockYouTubeClient.makeVideo(videoId: "abc"))
+        sut.activeInlineVideoId = "abc"
+        sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 0, duration: 10,
+            videoId: "abc", title: nil, isAd: false
+        ))
+
+        sut.inlineSurfaceWillDisappear(videoId: "abc")
+
+        #expect(sut.surfaceLocation == .none)
+        #expect(sut.currentVideo == nil)
+        #expect(controller.tearDownCount == 1)
+    }
+
+    @Test("Pop-out disabled still yields to the one-shot source-switch suppression")
+    func sourceSwitchStillPausesInPlaceWhenPopOutDisabled() {
+        let controller = MockYouTubeWatchPlaybackController()
+        let sut = YouTubePlayerService(
+            playbackController: controller,
+            shouldPopOutOnNavigateAway: { false }
+        )
+        sut.play(video: MockYouTubeClient.makeVideo(videoId: "abc"))
+        sut.activeInlineVideoId = "abc"
+        sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 5, duration: 60,
+            videoId: "abc", title: nil, isAd: false
+        ))
+
+        sut.prepareForSourceSwitch()
+        sut.inlineSurfaceWillDisappear(videoId: "abc")
+
+        // Suppression wins regardless of the setting: paused in place, not stopped.
+        #expect(controller.pauseCount == 1)
+        #expect(sut.surfaceLocation == .inline)
+        #expect(sut.currentVideo?.videoId == "abc")
+        #expect(controller.tearDownCount == 0)
+    }
+
+    @Test("Pop-out gate is read live, not captured at init")
+    func popOutGateReadLive() {
+        let controller = MockYouTubeWatchPlaybackController()
+        var popOutEnabled = false
+        let sut = YouTubePlayerService(
+            playbackController: controller,
+            shouldPopOutOnNavigateAway: { popOutEnabled }
+        )
+
+        // First navigate-away with the gate off: stops.
+        sut.play(video: MockYouTubeClient.makeVideo(videoId: "abc"))
+        sut.activeInlineVideoId = "abc"
+        sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 0, duration: 10,
+            videoId: "abc", title: nil, isAd: false
+        ))
+        sut.inlineSurfaceWillDisappear(videoId: "abc")
+        #expect(sut.surfaceLocation == .none)
+
+        // Flip the gate on; a fresh playback now pops out.
+        popOutEnabled = true
+        sut.play(video: MockYouTubeClient.makeVideo(videoId: "abc"))
+        sut.activeInlineVideoId = "abc"
+        sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 0, duration: 10,
+            videoId: "abc", title: nil, isAd: false
+        ))
+        sut.inlineSurfaceWillDisappear(videoId: "abc")
+        #expect(sut.surfaceLocation == .floating)
+    }
+
     @Test("Video ended invokes the hook and clears isPlaying")
     func videoEnded() {
         self.sut.play(video: MockYouTubeClient.makeVideo(videoId: "abc"))
@@ -217,6 +302,196 @@ struct YouTubePlayerServiceTests {
 
         #expect(self.sut.isPlaying == false)
         #expect(endedVideoId == "abc")
+    }
+
+    @Test("A stale ended event for a no-longer-current video does not conclude the new watch")
+    func endedEventForStaleVideoIdIgnored() {
+        self.sut.play(video: MockYouTubeClient.makeVideo(videoId: "a"))
+        // The page drifts to "b" (now the current watch).
+        self.sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 3, duration: 60,
+            videoId: "b", title: "B", isAd: false
+        ))
+        #expect(self.sut.currentVideo?.videoId == "b")
+        let conclusionBefore = self.sut.watchConclusionGeneration
+
+        // A late VIDEO_ENDED for the previous video "a" arrives — it must be
+        // ignored so it doesn't conclude (and dedupe) the current watch of "b".
+        self.sut.handleVideoEnded(videoId: "a")
+        #expect(self.sut.watchConclusionGeneration == conclusionBefore)
+
+        // The real end of "b" still concludes it.
+        self.sut.handleVideoEnded(videoId: "b")
+        #expect(self.sut.watchConclusionGeneration == conclusionBefore + 1)
+    }
+
+    @Test("An ended event while an ad is showing does not conclude the watch")
+    func endedEventDuringAdIgnored() {
+        self.sut.play(video: MockYouTubeClient.makeVideo(videoId: "a"))
+        // An ad is playing (last STATE_UPDATE set isShowingAd).
+        self.sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 2, duration: 15,
+            videoId: "a", title: nil, isAd: true
+        ))
+        #expect(self.sut.isShowingAd)
+        let conclusionBefore = self.sut.watchConclusionGeneration
+
+        // The ad element fires VIDEO_ENDED — must NOT conclude the content watch.
+        self.sut.handleVideoEnded(videoId: "a")
+        #expect(self.sut.watchConclusionGeneration == conclusionBefore)
+
+        // Once the real content plays and ends, it concludes normally.
+        self.sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 100, duration: 120,
+            videoId: "a", title: nil, isAd: false
+        ))
+        self.sut.handleVideoEnded(videoId: "a")
+        #expect(self.sut.watchConclusionGeneration == conclusionBefore + 1)
+    }
+
+    @Test("Watch-activity generation advances on every watch-state change and survives stop")
+    func watchActivityGenerationTracksEveryChange() async {
+        #expect(self.sut.watchActivityGeneration == 0)
+        #expect(self.sut.watchConclusionGeneration == 0)
+
+        // Starting a video advances the ACTIVITY generation, but NOT the
+        // CONCLUSION generation (a bare start has no accrued progress to reflect).
+        self.sut.play(video: MockYouTubeClient.makeVideo(videoId: "a"))
+        #expect(self.sut.watchActivityGeneration == 1)
+        #expect(self.sut.watchConclusionGeneration == 0)
+
+        // Skipping concludes one watch, begins another — advances BOTH.
+        self.sut.setUpNext([MockYouTubeClient.makeVideo(videoId: "b")])
+        await self.sut.skipForward()
+        #expect(self.sut.currentVideo?.videoId == "b")
+        #expect(self.sut.watchActivityGeneration == 2)
+        #expect(self.sut.watchConclusionGeneration == 1)
+
+        // SPA drift to a different video (autoplay/next) — advances BOTH.
+        self.sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 5, duration: 60,
+            videoId: "c", title: "Drifted", isAd: false
+        ))
+        #expect(self.sut.currentVideo?.videoId == "c")
+        #expect(self.sut.watchActivityGeneration == 3)
+        #expect(self.sut.watchConclusionGeneration == 2)
+
+        // A natural finish on a video that accrued real progress — advances BOTH.
+        self.sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 58, duration: 60,
+            videoId: "c", title: nil, isAd: false
+        ))
+        self.sut.handleVideoEnded(videoId: "c")
+        #expect(self.sut.watchActivityGeneration == 4)
+        #expect(self.sut.watchConclusionGeneration == 3)
+
+        // Closing the player after a finish (progress still nonzero, currentVideo
+        // still set) must NOT re-signal the already-finished video as a fresh
+        // conclusion — neither generation advances, and stop() doesn't reset them.
+        self.sut.stop()
+        #expect(self.sut.currentVideo == nil)
+        #expect(self.sut.watchActivityGeneration == 4)
+        #expect(self.sut.watchConclusionGeneration == 3)
+    }
+
+    @Test("Closing the window right after a finish does not double-signal the conclusion")
+    func stopAfterFinishDoesNotDoubleSignal() {
+        self.sut.play(video: MockYouTubeClient.makeVideo(videoId: "a"))
+        self.sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 119, duration: 120,
+            videoId: "a", title: nil, isAd: false
+        ))
+        self.sut.handleVideoEnded(videoId: "a")
+        let activityAfterFinish = self.sut.watchActivityGeneration
+        let conclusionAfterFinish = self.sut.watchConclusionGeneration
+
+        // The user closes the floating window; progress is still 119 and
+        // currentVideo is still "a", but the finish already signalled.
+        self.sut.stop()
+        #expect(self.sut.watchActivityGeneration == activityAfterFinish)
+        #expect(self.sut.watchConclusionGeneration == conclusionAfterFinish)
+    }
+
+    @Test("Auto-advance drift right after a finish does not double-signal the conclusion")
+    func driftAfterFinishDoesNotDoubleConclude() {
+        self.sut.play(video: MockYouTubeClient.makeVideo(videoId: "a"))
+        self.sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 119, duration: 120,
+            videoId: "a", title: nil, isAd: false
+        ))
+        self.sut.handleVideoEnded(videoId: "a")
+        let conclusionAfterFinish = self.sut.watchConclusionGeneration
+        let activityAfterFinish = self.sut.watchActivityGeneration
+
+        // The page auto-advances to the next video (playlist). The drift begins a
+        // NEW watch (activity advances) but must NOT re-conclude the already
+        // finished "a" (conclusion stays put).
+        self.sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 0, duration: 200,
+            videoId: "b", title: "Next", isAd: false
+        ))
+        #expect(self.sut.currentVideo?.videoId == "b")
+        #expect(self.sut.watchConclusionGeneration == conclusionAfterFinish) // no double-conclude
+        #expect(self.sut.watchActivityGeneration == activityAfterFinish + 1) // new watch began
+
+        // The new video then concludes (e.g. finishes) — that DOES signal, since
+        // it is a different, unconcluded watch.
+        self.sut.handleVideoEnded(videoId: "b")
+        #expect(self.sut.watchConclusionGeneration == conclusionAfterFinish + 1)
+    }
+
+    @Test("Replaying a finished video lets its later stop signal the new partial watch")
+    func replayAfterFinishReSignalsOnStop() {
+        self.sut.play(video: MockYouTubeClient.makeVideo(videoId: "a"))
+        self.sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 119, duration: 120,
+            videoId: "a", title: nil, isAd: false
+        ))
+        self.sut.handleVideoEnded(videoId: "a") // finished → concluded
+        let conclusionAfterFinish = self.sut.watchConclusionGeneration
+
+        // The user replays the SAME video (seek back / play again): it's playing
+        // with fresh progress, which clears the concluded flag.
+        self.sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 8, duration: 120,
+            videoId: "a", title: nil, isAd: false
+        ))
+
+        // Closing after the partial rewatch must signal again (not be deduped),
+        // so Home reflects the new resume position.
+        self.sut.stop()
+        #expect(self.sut.watchConclusionGeneration == conclusionAfterFinish + 1)
+    }
+
+    @Test("Stopping a video with accrued progress advances both generations")
+    func stopWithProgressAdvancesGeneration() {
+        // Closing the floating window or navigating away with pop-out disabled
+        // both route through stop(); a partial watch must still signal Home — and
+        // it is a CONCLUSION, so the Home-root observer's signal advances too.
+        self.sut.play(video: MockYouTubeClient.makeVideo(videoId: "a"))
+        #expect(self.sut.watchActivityGeneration == 1)
+        #expect(self.sut.watchConclusionGeneration == 0)
+        self.sut.updatePlaybackState(.init(
+            isPlaying: true, progress: 42, duration: 120,
+            videoId: "a", title: nil, isAd: false
+        ))
+
+        self.sut.stop()
+        #expect(self.sut.watchActivityGeneration == 2) // progress > 0 → signalled
+        #expect(self.sut.watchConclusionGeneration == 1)
+    }
+
+    @Test("Stopping a video with no progress does not advance either generation")
+    func stopWithoutProgressDoesNotAdvance() {
+        // A video that never started playing (progress 0) has no resume state to
+        // reflect, so closing it shouldn't trigger a redundant rail refresh.
+        self.sut.play(video: MockYouTubeClient.makeVideo(videoId: "a"))
+        #expect(self.sut.watchActivityGeneration == 1)
+        #expect(self.sut.watchConclusionGeneration == 0)
+
+        self.sut.stop() // progress is still 0
+        #expect(self.sut.watchActivityGeneration == 1)
+        #expect(self.sut.watchConclusionGeneration == 0)
     }
 
     @Test("Volume changes forward to the playback controller")

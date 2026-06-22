@@ -103,6 +103,143 @@ struct YouTubeFeedParserTests {
         let result = YouTubeFeedParser.deduplicate([video1, video2, video1])
         #expect(result.map(\.videoId) == ["a", "b"])
     }
+
+    // MARK: - Home chips & shelves
+
+    /// A chip spec for `makeHomeResponse` (struct, not a tuple, to satisfy the
+    /// large_tuple lint rule).
+    private struct ChipFixture {
+        let title: String
+        /// InnerTube continuation cursor; `nil` models the tokenless "All" chip.
+        let continuation: String?
+        let selected: Bool
+    }
+
+    /// Builds a minimal home browse response with a filter-chip bar and
+    /// optional richShelfRenderer shelves, matching the live `FEwhat_to_watch`
+    /// shape (`richGridRenderer.header.feedFilterChipBarRenderer` and
+    /// `richGridRenderer.contents[].richSectionRenderer.content.richShelfRenderer`).
+    private func makeHomeResponse(
+        chips: [ChipFixture] = [],
+        shelves: [(title: String, videoIds: [String])] = []
+    ) -> [String: Any] {
+        func chipEntry(_ chip: ChipFixture) -> [String: Any] {
+            var renderer: [String: Any] = [
+                "text": ["simpleText": chip.title],
+                "isSelected": chip.selected,
+            ]
+            if let continuation = chip.continuation {
+                renderer["navigationEndpoint"] = [
+                    "continuationCommand": ["token": continuation],
+                ]
+            }
+            return ["chipCloudChipRenderer": renderer]
+        }
+
+        func videoRenderer(_ id: String) -> [String: Any] {
+            ["richItemRenderer": ["content": ["videoRenderer": [
+                "videoId": id,
+                "title": ["runs": [["text": "Video \(id)"]]],
+            ]]]]
+        }
+
+        func shelfEntry(_ shelf: (title: String, videoIds: [String])) -> [String: Any] {
+            ["richSectionRenderer": ["content": ["richShelfRenderer": [
+                "title": ["runs": [["text": shelf.title]]],
+                "contents": shelf.videoIds.map(videoRenderer),
+            ]]]]
+        }
+
+        return [
+            "contents": ["twoColumnBrowseResultsRenderer": ["tabs": [
+                ["tabRenderer": ["content": ["richGridRenderer": [
+                    "header": ["feedFilterChipBarRenderer": ["contents": chips.map(chipEntry)]],
+                    "contents": shelves.map(shelfEntry),
+                ]]]],
+            ]]],
+        ]
+    }
+
+    @Test("Parses filter chips and skips the selected All chip")
+    func parsesChips() {
+        let data = self.makeHomeResponse(chips: [
+            ChipFixture(title: "All", continuation: nil, selected: true),
+            ChipFixture(title: "Gaming", continuation: "tok-gaming", selected: false),
+            ChipFixture(title: "Music", continuation: "tok-music", selected: false),
+        ])
+
+        let chips = YouTubeFeedParser.parseChips(data)
+
+        #expect(chips.map(\.title) == ["Gaming", "Music"])
+        #expect(chips.map(\.continuation) == ["tok-gaming", "tok-music"])
+    }
+
+    @Test("Chips without a token are skipped")
+    func skipsTokenlessChips() {
+        let data = self.makeHomeResponse(chips: [
+            ChipFixture(title: "Gaming", continuation: "tok-gaming", selected: false),
+            ChipFixture(title: "Broken", continuation: nil, selected: false),
+        ])
+
+        let chips = YouTubeFeedParser.parseChips(data)
+
+        #expect(chips.map(\.title) == ["Gaming"])
+    }
+
+    @Test("Parses titled home shelves with their videos")
+    func parsesHomeShelves() {
+        let data = self.makeHomeResponse(shelves: [
+            (title: "Breaking news", videoIds: ["n1", "n2"]),
+        ])
+
+        let sections = YouTubeFeedParser.parseHomeShelves(data)
+
+        #expect(sections.count == 1)
+        let shelf = sections.first
+        #expect(shelf?.title == "Breaking news")
+        #expect(shelf?.kind == .shelf)
+        #expect(shelf?.videos.map(\.videoId) == ["n1", "n2"])
+    }
+
+    @Test("Empty shelves are dropped")
+    func dropsEmptyShelves() {
+        let data = self.makeHomeResponse(shelves: [(title: "Empty", videoIds: [])])
+
+        #expect(YouTubeFeedParser.parseHomeShelves(data).isEmpty)
+    }
+
+    @Test("parseHomeBundle parses feed, chips, and shelves from one Data response")
+    func parsesHomeBundle() throws {
+        let response = self.makeHomeResponse(
+            chips: [
+                ChipFixture(title: "All", continuation: nil, selected: true),
+                ChipFixture(title: "Gaming", continuation: "tok-gaming", selected: false),
+            ],
+            shelves: [(title: "Breaking news", videoIds: ["n1", "n2"])]
+        )
+        let data = try JSONSerialization.data(withJSONObject: response)
+
+        let bundle = try YouTubeFeedParser.parseHomeBundle(from: data)
+
+        // Chips: the selected "All" chip is dropped.
+        #expect(bundle.chips.map(\.title) == ["Gaming"])
+        #expect(bundle.chips.map(\.continuation) == ["tok-gaming"])
+        // Shelves: the titled shelf with its videos.
+        #expect(bundle.shelves.map(\.title) == ["Breaking news"])
+        #expect(bundle.shelves.first?.videos.map(\.videoId) == ["n1", "n2"])
+        // Feed: the flat walk collects the shelf videos too (the view model
+        // dedupes them against the shelf rail).
+        #expect(bundle.feed.videos.map(\.videoId).sorted() == ["n1", "n2"])
+    }
+
+    @Test("parseHomeBundle throws when the bytes are not a JSON object")
+    func homeBundleThrowsOnNonJSON() {
+        let data = Data("not json".utf8)
+
+        #expect(throws: (any Error).self) {
+            _ = try YouTubeFeedParser.parseHomeBundle(from: data)
+        }
+    }
 }
 
 // MARK: - WatchNextParserTests

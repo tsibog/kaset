@@ -12,8 +12,38 @@ final class MockUITestYouTubeClient: YouTubeClientProtocol {
         YouTubeFeed(videos: Self.sampleVideos, continuation: nil)
     }
 
+    func getHomeBundle() async throws -> YouTubeHomeBundle {
+        try await YouTubeHomeBundle(
+            feed: self.getHomeFeed(),
+            chips: self.getHomeChips(),
+            shelves: self.getHomeShelves()
+        )
+    }
+
     func getHomeFeedContinuation() async throws -> YouTubeFeed? {
         nil
+    }
+
+    func getHomeChips() async throws -> [YouTubeHomeChip] {
+        [
+            YouTubeHomeChip(title: "Gaming", continuation: "mock-chip-gaming"),
+            YouTubeHomeChip(title: "Music", continuation: "mock-chip-music"),
+        ]
+    }
+
+    func getHomeShelves() async throws -> [YouTubeHomeSection] {
+        [
+            YouTubeHomeSection(
+                id: "shelf-1-Breaking news",
+                title: "Breaking news",
+                videos: Self.sampleVideos,
+                kind: .shelf
+            ),
+        ]
+    }
+
+    func getHomeTopicFeed(continuation _: String) async throws -> YouTubeFeed {
+        YouTubeFeed(videos: Self.sampleVideos, continuation: nil)
     }
 
     func search(query _: String, filter: YouTubeSearchFilter) async throws -> YouTubeSearchResponse {
@@ -131,8 +161,8 @@ final class MockUITestYouTubeClient: YouTubeClientProtocol {
         [Self.sampleChannel]
     }
 
-    func getHistory() async throws -> YouTubeFeed {
-        YouTubeFeed(videos: Self.sampleVideos, continuation: nil)
+    func getHistory(forceRefresh _: Bool) async throws -> YouTubeFeed {
+        YouTubeFeed(videos: Self.sampleHistoryVideos, continuation: nil)
     }
 
     func getUserPlaylists() async throws -> [YouTubePlaylist] {
@@ -176,6 +206,42 @@ final class MockUITestYouTubeClient: YouTubeClientProtocol {
             lengthText: "1:02:03",
             viewCountText: "3K views",
             publishedText: "3 days ago"
+        ),
+    ]
+
+    /// History fixture including partially-watched videos so the Continue
+    /// Watching rail renders under UI-test mode (watchedPercent within 1…95).
+    private static let sampleHistoryVideos = [
+        YouTubeVideo(
+            videoId: "mock-history-1",
+            title: "Mock History One",
+            channelName: "Mock Channel",
+            channelId: "UCmockchannel",
+            lengthText: "12:00",
+            viewCountText: "5K views",
+            publishedText: "1 day ago",
+            watchedPercent: 35
+        ),
+        YouTubeVideo(
+            videoId: "mock-history-2",
+            title: "Mock History Two",
+            channelName: "Another Channel",
+            channelId: "UCanotherchannel",
+            lengthText: "8:20",
+            viewCountText: "9K views",
+            publishedText: "2 days ago",
+            watchedPercent: 80
+        ),
+        // Fully watched: excluded from Continue Watching, present in history.
+        YouTubeVideo(
+            videoId: "mock-history-3",
+            title: "Mock History Three",
+            channelName: "Mock Channel",
+            channelId: "UCmockchannel",
+            lengthText: "4:10",
+            viewCountText: "1K views",
+            publishedText: "3 days ago",
+            watchedPercent: 100
         ),
     ]
 

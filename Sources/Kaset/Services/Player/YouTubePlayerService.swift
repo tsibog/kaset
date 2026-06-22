@@ -21,6 +21,7 @@ protocol YouTubeWatchPlaybackControlling: AnyObject {
     func availableQualityLevels() async -> [String]
     func currentQualityLevel() async -> String?
     func setQualityLevel(_ level: String)
+    func storyboardSpec(expectedVideoId: String?) async -> String?
     func tearDown()
 }
 
@@ -47,6 +48,41 @@ final class YouTubePlayerService {
 
     /// The video currently loaded for playback (nil when playback is closed).
     private(set) var currentVideo: YouTubeVideo?
+
+    /// Monotonic generation bumped by EVERY change to what/how-much was watched:
+    /// a video starting (`play`), a skip to another (`advance`), a finish
+    /// (`handleVideoEnded`), the page drifting to a different video
+    /// (`updatePlaybackState`), and `stop()` tearing down a video that had
+    /// accrued progress. It is a pure SIGNAL — set-only here, never consumed by
+    /// readers. Home keeps its OWN watermark of the last generation it reflected
+    /// and rebuilds Continue Watching whenever this is ahead of that watermark.
+    ///
+    /// Deliberately over-signals: a redundant rebuild is cheap and correct, while
+    /// a missed signal leaves the rail stale. This inverts the old fragile model
+    /// (multiple counters, eagerly consumed at the wrong moment) where every new
+    /// watch path needed a matching "remember to bump / don't consume early" fix.
+    private(set) var watchActivityGeneration = 0
+
+    /// Like `watchActivityGeneration` but bumped only when a watch CONCLUDES with
+    /// progress to reflect — a skip (`advance`), finish (`handleVideoEnded`),
+    /// drift (`updatePlaybackState`), or `stop()` of a video with accrued
+    /// progress — NOT on a bare `play` start. The Home-root observer (which fires
+    /// without any navigation, e.g. a floating video finishing while the user
+    /// sits on Home) keys on THIS so a bare start, which has no new resume state
+    /// yet, can't trigger a premature rebuild that advances the watermark and
+    /// then swallows the real progress. The value passed to the view model is
+    /// still `watchActivityGeneration`; this only decides *when* that observer
+    /// fires. (Navigation-return observers use `watchActivityGeneration` directly:
+    /// by the time the user navigates back, progress has accrued.)
+    private(set) var watchConclusionGeneration = 0
+
+    /// True once the current video has already signalled its conclusion (a
+    /// natural finish via `handleVideoEnded`). It prevents `stop()` — which often
+    /// follows a finish when the user closes the floating window — from
+    /// re-signalling the same already-finished video as a fresh partial-watch
+    /// conclusion (a double bump that would cancel/restart the refresh the finish
+    /// just scheduled). Reset whenever a new video becomes current.
+    private var currentWatchConcluded = false
 
     /// Whether the video is currently playing.
     private(set) var isPlaying = false
@@ -119,6 +155,21 @@ final class YouTubePlayerService {
     /// The player's current quality level.
     private(set) var currentQuality: String?
 
+    /// YouTube storyboard spec for the current video (drives the ambient
+    /// backdrop's fine-grained live color). `nil` until fetched / unavailable.
+    private(set) var storyboardSpec: String?
+
+    /// The video id whose storyboard spec has been *resolved* — either
+    /// successfully fetched, or confirmed absent after a full retry while real
+    /// content (not a preroll ad) was playing. Acts as a positive+negative cache
+    /// so a re-trigger for the same video is a no-op and storyboard-less videos
+    /// don't re-fetch on every playback update.
+    private var storyboardFetchVideoId: String?
+
+    /// The video id whose storyboard fetch loop is currently running, to avoid
+    /// spawning overlapping loops / repeated WebView evaluations for one video.
+    private var storyboardFetchInFlightVideoId: String?
+
     /// The video whose playback options were last fetched.
     private var playbackOptionsVideoId: String?
 
@@ -140,12 +191,20 @@ final class YouTubePlayerService {
     private let playbackController: any YouTubeWatchPlaybackControlling
     private let logger = DiagnosticsLogger.player
 
+    /// Whether a playing video should pop out into the floating window when the
+    /// inline watch view disappears (navigate-away). Read live so the user's
+    /// setting takes effect mid-session; injected so tests stay deterministic
+    /// without touching global `UserDefaults`.
+    private let shouldPopOutOnNavigateAway: @MainActor () -> Bool
+
     init(
         webKitManager: WebKitManager = .shared,
-        playbackController: (any YouTubeWatchPlaybackControlling)? = nil
+        playbackController: (any YouTubeWatchPlaybackControlling)? = nil,
+        shouldPopOutOnNavigateAway: @escaping @MainActor () -> Bool = { SettingsManager.shared.popOutVideoOnNavigateAway }
     ) {
         self.webKitManager = webKitManager
         self.playbackController = playbackController ?? YouTubeWatchWebView.shared
+        self.shouldPopOutOnNavigateAway = shouldPopOutOnNavigateAway
     }
 
     // MARK: - Commands
@@ -160,6 +219,8 @@ final class YouTubePlayerService {
         }
         self.upNext = []
         self.currentVideo = video
+        self.watchActivityGeneration += 1 // a new watch began
+        self.currentWatchConcluded = false
         self.resetPerVideoState()
         self.surfaceLocation = .inline
 
@@ -196,6 +257,18 @@ final class YouTubePlayerService {
     /// Stops playback entirely and releases the surface.
     func stop() {
         self.logger.info("YouTubePlayer: stop")
+        // Closing/stopping a video that accrued progress changes its resume
+        // state in history, so signal the conclusion before clearing — this
+        // covers closing the floating window (windowWillClose -> stop) and
+        // navigating away with pop-out disabled (inlineSurfaceWillDisappear ->
+        // stop) after a partial watch, neither of which emits a skip or finish
+        // event. `signalWatchConclusion` de-dupes, so a close right after a
+        // natural end (already signalled) does not re-signal the finished video.
+        if self.currentVideo != nil, self.progress > 0 {
+            if self.signalWatchConclusion() {
+                self.watchActivityGeneration += 1
+            }
+        }
         self.currentVideo = nil
         self.isPlaying = false
         self.progress = 0
@@ -285,6 +358,10 @@ final class YouTubePlayerService {
 
         self.playbackWillStart?()
         self.currentVideo = video
+        // A skip concludes the prior watch (deduped) and begins a new one.
+        self.signalWatchConclusion()
+        self.watchActivityGeneration += 1
+        self.currentWatchConcluded = false
         self.resetPerVideoState()
         self.playbackController.prepare(webKitManager: self.webKitManager, playerService: self)
         self.playbackController.loadVideo(videoId: video.videoId)
@@ -313,6 +390,9 @@ final class YouTubePlayerService {
         self.activeCaptionLanguageCode = nil
         self.qualityLevels = []
         self.currentQuality = nil
+        self.storyboardSpec = nil
+        self.storyboardFetchVideoId = nil
+        self.storyboardFetchInFlightVideoId = nil
         self.playbackOptionsVideoId = nil
     }
 
@@ -354,6 +434,52 @@ final class YouTubePlayerService {
             self.activeCaptionLanguageCode = await self.playbackController.currentCaptionLanguageCode()
 
             if !tracks.isEmpty || attempt == 2 {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(1500))
+        }
+    }
+
+    /// Fetches the storyboard spec for the ambient backdrop, keyed to its video
+    /// so a previous video's spec never leaks forward. Kept separate from
+    /// `refreshPlaybackOptions` so this cosmetic-only data never delays caption
+    /// or quality loading. Retries briefly since the player response, like the
+    /// captions module, isn't ready the instant playback starts.
+    func refreshStoryboardSpec() async {
+        let videoId = self.currentVideo?.videoId
+        // Already resolved this exact video (got a spec, or confirmed it has
+        // none after a full retry) — nothing to do. The trigger only calls this
+        // for real content, never during a preroll ad, so a resolved `nil` here
+        // is a genuine "no storyboard" and is safe to cache as a negative result
+        // instead of re-fetching on every 1 Hz playback update.
+        if self.storyboardFetchVideoId == videoId {
+            return
+        }
+        if self.storyboardFetchInFlightVideoId == videoId {
+            return
+        }
+        self.storyboardFetchInFlightVideoId = videoId
+        defer {
+            if self.storyboardFetchInFlightVideoId == videoId {
+                self.storyboardFetchInFlightVideoId = nil
+            }
+        }
+        // Drop any spec from a previous video before awaiting the refetch.
+        self.storyboardSpec = nil
+        self.storyboardFetchVideoId = nil
+
+        for attempt in 0 ..< 3 {
+            let spec = await self.playbackController.storyboardSpec(expectedVideoId: videoId)
+            guard self.currentVideo?.videoId == videoId else { return }
+            if let spec {
+                self.storyboardSpec = spec
+                self.storyboardFetchVideoId = videoId
+                return
+            }
+            if attempt == 2 {
+                // Retries exhausted on real content: cache the negative result
+                // so we don't loop forever on a storyboard-less video.
+                self.storyboardFetchVideoId = videoId
                 return
             }
             try? await Task.sleep(for: .milliseconds(1500))
@@ -440,9 +566,11 @@ final class YouTubePlayerService {
             return
         }
 
-        if self.isPlaying {
+        if self.isPlaying, self.shouldPopOutOnNavigateAway() {
             self.popOutToWindow()
         } else {
+            // Playing with pop-out disabled, or paused: stop instead of
+            // leaving a detached surface.
             self.stop()
         }
     }
@@ -472,6 +600,21 @@ final class YouTubePlayerService {
         self.duration = update.duration
         self.isShowingAd = update.isAd
 
+        // A concluded video that is playing again (replayed via the player bar or
+        // a seek back after it finished) begins a fresh watch — clear the
+        // conclusion flag so its later stop/finish signals the new partial
+        // rewatch instead of being deduped. Only when it's the same current video
+        // still playing real content (drift to a different id is handled below
+        // and starts its own unconcluded watch).
+        if self.currentWatchConcluded,
+           update.isPlaying,
+           !update.isAd,
+           let videoId = update.videoId,
+           videoId == self.currentVideo?.videoId
+        {
+            self.currentWatchConcluded = false
+        }
+
         // Fetch captions/quality options once per video, after playback starts
         // (the player APIs aren't ready before that).
         if update.isPlaying,
@@ -481,6 +624,22 @@ final class YouTubePlayerService {
             self.playbackOptionsVideoId = videoId
             Task {
                 await self.refreshPlaybackOptions()
+            }
+        }
+
+        // Storyboard color drives the ambient backdrop, so only fetch it when
+        // the feature is on and real content (not a preroll ad) is playing.
+        // Not gated on the one-shot playback-options branch above, so it also
+        // fires when the user enables ambient mid-playback or when content
+        // starts after an ad. `refreshStoryboardSpec` is self-guarding, so
+        // calling it on each qualifying update is cheap.
+        if update.isPlaying,
+           !update.isAd,
+           self.currentVideo != nil,
+           SettingsManager.shared.ambientBackdropEnabled
+        {
+            Task {
+                await self.refreshStoryboardSpec()
             }
         }
 
@@ -497,6 +656,14 @@ final class YouTubePlayerService {
                 channelName: current.channelName,
                 channelId: current.channelId
             )
+            // The page autoplayed/navigated to a new video (e.g. in the floating
+            // window) — the prior video concluded and a new watch began. Signal
+            // the conclusion (unless it already finished, to avoid double-bumping
+            // a natural end that auto-advances), then mark the new video as a
+            // fresh, unconcluded watch.
+            self.signalWatchConclusion()
+            self.watchActivityGeneration += 1
+            self.currentWatchConcluded = false
             YouTubeWatchWebView.shared.currentVideoId = videoId
         }
     }
@@ -504,7 +671,44 @@ final class YouTubePlayerService {
     /// Handles natural video completion.
     func handleVideoEnded(videoId: String?) {
         self.logger.info("YouTubePlayer: video ended")
+        // Ignore an ended event that is not for the CURRENT content watch:
+        //   - a late `VIDEO_ENDED` for the previous video arriving after a skip
+        //     or SPA drift already made another video current (stale id), and
+        //   - an ad's video element firing `VIDEO_ENDED` while an ad is showing.
+        // Either would wrongly mark the active watch concluded and dedupe its
+        // real conclusion. When the bridge supplies no id we fall back to the
+        // current video (the common floating-window finish).
+        let isStaleId = videoId != nil && videoId != self.currentVideo?.videoId
+        guard !isStaleId, !self.isShowingAd else {
+            self.logger.debug("YouTubePlayer: ignoring ended event (stale id or ad)")
+            return
+        }
         self.isPlaying = false
+        // A finish changes watch history (the video crosses into "finished"), so
+        // signal it — this lets Home drop a just-finished video from Continue
+        // Watching even when the video ended in the floating window while the
+        // user was already sitting on Home (no navigation fires).
+        if self.signalWatchConclusion() {
+            self.watchActivityGeneration += 1
+        }
         self.onVideoEnded?(videoId)
+    }
+
+    /// Marks the CURRENT watch as concluded with resume state to reflect and
+    /// advances `watchConclusionGeneration` — de-duplicated, so a watch is only
+    /// signalled once no matter how many conclusion paths fire for it (a natural
+    /// finish followed by an auto-advance drift or a window close would otherwise
+    /// double-bump and make Home cancel/restart the refresh the first conclusion
+    /// scheduled). Does NOT touch `watchActivityGeneration`: callers bump that
+    /// once per watch-state transition (a skip/drift bumps it for the new watch;
+    /// a finish/stop bumps it here). Callers that begin a NEW watch (`advance`,
+    /// drift) clear `currentWatchConcluded` afterward so the next watch can
+    /// signal.
+    @discardableResult
+    private func signalWatchConclusion() -> Bool {
+        guard !self.currentWatchConcluded else { return false }
+        self.watchConclusionGeneration += 1
+        self.currentWatchConcluded = true
+        return true
     }
 }

@@ -14,11 +14,29 @@ protocol YouTubeClientProtocol: Sendable {
     /// Fetches the recommended home feed (`FEwhat_to_watch`).
     func getHomeFeed() async throws -> YouTubeFeed
 
+    /// Fetches the home feed, its filter chips, and its titled shelves from a
+    /// single `FEwhat_to_watch` request, parsed off the main actor. Preferred
+    /// over calling `getHomeFeed`/`getHomeChips`/`getHomeShelves` separately:
+    /// the ~2 MB response is fetched and walked once instead of three times.
+    func getHomeBundle() async throws -> YouTubeHomeBundle
+
     /// Fetches the next page of the home feed, or `nil` when exhausted.
     func getHomeFeedContinuation() async throws -> YouTubeFeed?
 
     /// Whether more home feed pages are available.
     var hasMoreHomeFeed: Bool { get }
+
+    /// Fetches the personalized filter-chip topics from the home feed
+    /// (Gaming, Music, AI, …), each browsable into a topic-filtered rail.
+    func getHomeChips() async throws -> [YouTubeHomeChip]
+
+    /// Fetches the titled shelves the home response itself returns (e.g.
+    /// "Breaking news"), preserving each shelf's title and videos.
+    func getHomeShelves() async throws -> [YouTubeHomeSection]
+
+    /// Browses a home filter chip's continuation token into a personalized,
+    /// topic-filtered feed for a home rail.
+    func getHomeTopicFeed(continuation: String) async throws -> YouTubeFeed
 
     // MARK: Search
 
@@ -67,8 +85,11 @@ protocol YouTubeClientProtocol: Sendable {
     /// Fetches the signed-in user's subscribed channels (from `guide`).
     func getSubscribedChannels() async throws -> [YouTubeChannel]
 
-    /// Fetches watch history (`FEhistory`).
-    func getHistory() async throws -> YouTubeFeed
+    /// Fetches watch history (`FEhistory`). Pass `forceRefresh: true` to bypass
+    /// the cached response — used to rebuild Continue Watching right after a
+    /// video is watched, where the warm 2 min entry would re-serve the
+    /// pre-watch resume percent.
+    func getHistory(forceRefresh: Bool) async throws -> YouTubeFeed
 
     /// Fetches the signed-in user's playlists.
     func getUserPlaylists() async throws -> [YouTubePlaylist]
@@ -86,4 +107,13 @@ protocol YouTubeClientProtocol: Sendable {
 
     /// Removes a video from Watch Later.
     func removeFromWatchLater(videoId: String) async throws
+}
+
+// MARK: - YouTubeClientProtocol Convenience
+
+extension YouTubeClientProtocol {
+    /// Fetches watch history using the cache (the default for normal loads).
+    func getHistory() async throws -> YouTubeFeed {
+        try await self.getHistory(forceRefresh: false)
+    }
 }
