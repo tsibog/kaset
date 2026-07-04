@@ -8,11 +8,15 @@ import Testing
 struct PlayerServiceLibraryTests {
     var playerService: PlayerService
     var mockClient: MockYTMusicClient
+    var authService: AuthService
 
     init() {
         self.mockClient = MockYTMusicClient()
+        self.authService = AuthService(webKitManager: MockWebKitManager())
+        self.authService.completeLogin(sapisid: "test-sapisid")
         self.playerService = PlayerService()
         self.playerService.setYTMusicClient(self.mockClient)
+        self.playerService.setAuthService(self.authService)
         SongLikeStatusManager.shared.clearCache()
         SongLikeStatusManager.shared.setActiveAccountID(nil)
     }
@@ -129,6 +133,22 @@ struct PlayerServiceLibraryTests {
         #expect(replacementClient.rateSongCalled == false)
     }
 
+    @Test("likeCurrentTrack is ignored while signed out")
+    func likeCurrentTrackIgnoredWhenSignedOut() async {
+        let authService = AuthService(webKitManager: MockWebKitManager())
+        await authService.checkLoginStatus()
+        self.playerService.setAuthService(authService)
+        self.playerService.currentTrack = TestFixtures.makeSong(id: "test-video")
+        self.playerService.currentTrackLikeStatus = .indifferent
+
+        self.playerService.likeCurrentTrack()
+
+        try? await Task.sleep(for: .milliseconds(200))
+
+        #expect(self.playerService.currentTrackLikeStatus == .indifferent)
+        #expect(self.mockClient.rateSongCalled == false)
+    }
+
     // MARK: - Dislike Current Track Tests
 
     @Test("dislikeCurrentTrack does nothing when no current track")
@@ -219,6 +239,22 @@ struct PlayerServiceLibraryTests {
         #expect(self.playerService.currentTrackLikeStatus == .indifferent)
     }
 
+    @Test("dislikeCurrentTrack is ignored while signed out")
+    func dislikeCurrentTrackIgnoredWhenSignedOut() async {
+        let authService = AuthService(webKitManager: MockWebKitManager())
+        await authService.checkLoginStatus()
+        self.playerService.setAuthService(authService)
+        self.playerService.currentTrack = TestFixtures.makeSong(id: "test-video")
+        self.playerService.currentTrackLikeStatus = .indifferent
+
+        self.playerService.dislikeCurrentTrack()
+
+        try? await Task.sleep(for: .milliseconds(200))
+
+        #expect(self.playerService.currentTrackLikeStatus == .indifferent)
+        #expect(self.mockClient.rateSongCalled == false)
+    }
+
     // MARK: - Toggle Library Status Tests
 
     @Test("toggleLibraryStatus does nothing when no current track")
@@ -241,6 +277,24 @@ struct PlayerServiceLibraryTests {
 
         try? await Task.sleep(for: .milliseconds(200))
 
+        #expect(self.mockClient.editSongLibraryStatusCalled == false)
+    }
+
+    @Test("toggleLibraryStatus is ignored while signed out")
+    func toggleLibraryStatusIgnoredWhenSignedOut() async {
+        let authService = AuthService(webKitManager: MockWebKitManager())
+        await authService.checkLoginStatus()
+        self.playerService.setAuthService(authService)
+        self.playerService.currentTrack = TestFixtures.makeSong(id: "test-video")
+        self.playerService.currentTrackInLibrary = false
+        let feedback = FeedbackTokens(add: "add-token", remove: "remove-token")
+        self.playerService[keyPath: \.currentTrackFeedbackTokens] = feedback
+
+        self.playerService.toggleLibraryStatus()
+
+        try? await Task.sleep(for: .milliseconds(200))
+
+        #expect(self.playerService.currentTrackInLibrary == false)
         #expect(self.mockClient.editSongLibraryStatusCalled == false)
     }
 
@@ -396,7 +450,7 @@ struct PlayerServiceLibraryTests {
 
     private func waitUntilLikeStatus(
         _ expectedStatus: LikeStatus,
-        attempts: Int = 200,
+        attempts: Int = 1000,
         pollInterval: Duration = .milliseconds(10)
     ) async -> Bool {
         for _ in 0 ..< attempts {

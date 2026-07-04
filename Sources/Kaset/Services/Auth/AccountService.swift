@@ -179,8 +179,8 @@ final class AccountService {
     /// If a previously selected account ID is stored, that account will be
     /// automatically selected.
     func fetchAccounts() async {
-        guard self.authService.state.isLoggedIn else {
-            self.logger.debug("AccountService: Skipping fetch - not logged in")
+        guard self.authService.hasPersonalAccount else {
+            self.logger.debug("AccountService: Skipping fetch - no personal account active")
             return
         }
 
@@ -195,7 +195,7 @@ final class AccountService {
         do {
             let response = try await self.ytMusicClient.fetchAccountsList()
             guard fetchGeneration == self.accountDataGeneration,
-                  self.authService.state.isLoggedIn
+                  self.authService.hasPersonalAccount
             else {
                 self.logger.info("AccountService: Ignoring stale account fetch after auth/account state changed")
                 return
@@ -487,6 +487,7 @@ final class AccountService {
         // awaits below can interleave.
         self.switchGeneration &+= 1
         let myGeneration = self.switchGeneration
+        let myAccountDataGeneration = self.accountDataGeneration
         var cancelledPriorSessionMutation = false
 
         // Now cancel and await any in-flight session mutation (a cold-launch brand
@@ -507,7 +508,9 @@ final class AccountService {
         priorNavigation?.cancel()
         await priorPinTask?.value
         self.sessionPinTask = nil
-        guard myGeneration == self.switchGeneration else {
+        guard myGeneration == self.switchGeneration,
+              myAccountDataGeneration == self.accountDataGeneration
+        else {
             self.logger.info("AccountService: Switch to \(account.name) superseded before navigation; abandoning")
             self.isLoading = false
             return
@@ -516,7 +519,9 @@ final class AccountService {
         if let priorNavigation, self.activeSwitchNavigation == priorNavigation {
             self.activeSwitchNavigation = nil
         }
-        guard myGeneration == self.switchGeneration else {
+        guard myGeneration == self.switchGeneration,
+              myAccountDataGeneration == self.accountDataGeneration
+        else {
             self.logger.info("AccountService: Switch to \(account.name) superseded while awaiting prior navigation; abandoning")
             self.isLoading = false
             return
@@ -528,7 +533,9 @@ final class AccountService {
            previous.signinURL == nil
         {
             rollbackAccount = await self.refreshAccountForRollback(matching: previous) ?? previous
-            guard myGeneration == self.switchGeneration else {
+            guard myGeneration == self.switchGeneration,
+                  myAccountDataGeneration == self.accountDataGeneration
+            else {
                 self.logger.info("AccountService: Switch to \(account.name) superseded while refreshing rollback token; abandoning")
                 self.isLoading = false
                 return
@@ -586,8 +593,16 @@ final class AccountService {
             // abort: the newer operation owns the session and the committed state.
             // Do NOT roll back the session here — the survivor is mid-flight and
             // will establish the correct identity.
-            guard myGeneration == self.switchGeneration else {
+            guard myGeneration == self.switchGeneration,
+                  myAccountDataGeneration == self.accountDataGeneration
+            else {
                 self.logger.info("AccountService: Switch to \(account.name) superseded; abandoning commit")
+                self.isLoading = false
+                return
+            }
+
+            guard self.accounts.contains(where: { $0.id == account.id }) else {
+                self.logger.info("AccountService: Account data cleared before switch to \(account.name) could commit; abandoning")
                 self.isLoading = false
                 return
             }
@@ -617,7 +632,9 @@ final class AccountService {
             // If a newer switch/pin superseded this one, do not touch shared state
             // on the failure path either — the survivor owns currentAccount and the
             // session. Surface nothing; the newer operation drives the outcome.
-            guard myGeneration == self.switchGeneration else {
+            guard myGeneration == self.switchGeneration,
+                  myAccountDataGeneration == self.accountDataGeneration
+            else {
                 self.logger.info("AccountService: Failed switch to \(account.name) was superseded; not reverting")
                 throw error
             }
@@ -627,7 +644,9 @@ final class AccountService {
                 previousAccount: rollbackAccount,
                 generation: myGeneration
             )
-            guard myGeneration == self.switchGeneration else {
+            guard myGeneration == self.switchGeneration,
+                  myAccountDataGeneration == self.accountDataGeneration
+            else {
                 self.logger.info("AccountService: Failed switch to \(account.name) was superseded during rollback; not surfacing failure")
                 throw error
             }

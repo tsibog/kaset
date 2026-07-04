@@ -10,6 +10,7 @@ struct PlaylistDetailView: View {
     let playerBarNavigationAction: PlayerBarNavigationAction
     @State var viewModel: PlaylistDetailViewModel
     @Environment(PlayerService.self) var playerService
+    @Environment(AuthService.self) private var authService
     @Environment(FavoritesManager.self) private var favoritesManager
     @Environment(SidebarPinnedItemsManager.self) var sidebarPinnedItemsManager: SidebarPinnedItemsManager?
     @Environment(SongLikeStatusManager.self) private var likeStatusManager
@@ -30,6 +31,10 @@ struct PlaylistDetailView: View {
     /// Computed property to check if playlist is in library.
     var isInLibrary: Bool {
         self.libraryViewModel?.isInLibrary(playlistId: self.playlist.id) ?? false
+    }
+
+    var hasPersonalAccount: Bool {
+        self.authService.hasPersonalAccount
     }
 
     private let logger = DiagnosticsLogger.ai
@@ -282,6 +287,7 @@ struct PlaylistDetailView: View {
             index: index,
             isAlbum: isAlbum,
             subtitle: self.trackArtistsDisplay(for: track, fallbackAuthor: author),
+            allowsLikeActions: self.hasPersonalAccount,
             onPlay: {
                 self.playTrackInQueue(
                     tracks: tracks, startingAt: index, fallbackArtist: author,
@@ -390,24 +396,32 @@ struct PlaylistDetailView: View {
                 Label("Play", systemImage: "play.fill")
             }
 
-            Divider()
+            if self.authService.hasPersonalAccount {
+                Divider()
 
-            FavoritesContextMenu.menuItem(for: track, manager: self.favoritesManager)
+                FavoritesContextMenu.menuItem(for: track, manager: self.favoritesManager)
 
-            Divider()
+                Divider()
 
-            LikeDislikeContextMenu(song: track, likeStatusManager: self.likeStatusManager)
+                LikeDislikeContextMenu(song: track, likeStatusManager: self.likeStatusManager)
+            }
 
             Divider()
 
             StartRadioContextMenu.menuItem(for: track, playerService: self.playerService)
 
-            Divider()
+            if self.authService.hasPersonalAccount {
+                Divider()
 
-            Button {
-                SongActionsHelper.addToLibrary(track, playerService: self.playerService)
-            } label: {
-                Label("Add to Library", systemImage: "plus.circle")
+                Button {
+                    SongActionsHelper.addToLibrary(track, playerService: self.playerService)
+                } label: {
+                    Label("Add to Library", systemImage: "plus.circle")
+                }
+
+                Divider()
+
+                AddToPlaylistContextMenu(song: track, client: self.viewModel.client)
             }
 
             Divider()
@@ -417,10 +431,6 @@ struct PlaylistDetailView: View {
             Divider()
 
             AddToQueueContextMenu(song: track, playerService: self.playerService)
-
-            Divider()
-
-            AddToPlaylistContextMenu(song: track, client: self.viewModel.client)
 
             Divider()
 
@@ -679,6 +689,7 @@ private struct PlaylistTrackRow<Menu: View>: View {
     let index: Int
     let isAlbum: Bool
     let subtitle: String?
+    let allowsLikeActions: Bool
     let onPlay: () -> Void
     @ViewBuilder let menu: () -> Menu
 
@@ -730,7 +741,7 @@ private struct PlaylistTrackRow<Menu: View>: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                LikeButton(song: self.track, isRowHovered: self.isHovered)
+                LikeButton(song: self.track, isRowHovered: self.isHovered, allowsActions: self.allowsLikeActions)
 
                 Text(self.track.durationDisplay)
                     .font(.system(size: 12))
