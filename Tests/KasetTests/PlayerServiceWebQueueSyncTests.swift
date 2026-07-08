@@ -74,6 +74,30 @@ struct PlayerServiceWebQueueSyncTests {
         #expect(self.playerService.pendingPlayVideoId == "v1")
     }
 
+    @Test("Manual next without queue materializes radio queue through API")
+    func manualNextWithoutQueueMaterializesRadioQueueThroughAPI() async {
+        let mockClient = MockYTMusicClient()
+        let seed = Song(id: "seed", title: "Seed", artists: [], album: nil, duration: 180, thumbnailURL: nil, videoId: "seed-video")
+        let radioSongs = [
+            Song(id: "radio-1", title: "Radio 1", artists: [], album: nil, duration: 200, thumbnailURL: nil, videoId: "radio-video-1"),
+            Song(id: "radio-2", title: "Radio 2", artists: [], album: nil, duration: 220, thumbnailURL: nil, videoId: "radio-video-2"),
+        ]
+        mockClient.radioQueueSongs[seed.videoId] = radioSongs
+        self.playerService.setYTMusicClient(mockClient)
+        self.playerService.currentTrack = seed
+        self.playerService.pendingPlayVideoId = seed.videoId
+        self.playerService.state = .playing
+
+        await self.playerService.next()
+
+        #expect(mockClient.getRadioQueueCalled == true)
+        #expect(mockClient.getRadioQueueVideoIds == [seed.videoId])
+        #expect(self.playerService.queue.map(\.videoId) == ["seed-video", "radio-video-1", "radio-video-2"])
+        #expect(self.playerService.currentIndex == 1)
+        #expect(self.playerService.currentTrack?.videoId == "radio-video-1")
+        #expect(self.playerService.progress == 0)
+    }
+
     @Test("Manual next ignores native injection marker and loads target deterministically")
     func manualNextIgnoresNativeInjectionMarkerAndLoadsTargetDeterministically() async {
         let songs = [

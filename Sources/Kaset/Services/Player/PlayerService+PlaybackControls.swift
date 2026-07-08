@@ -417,7 +417,18 @@ extension PlayerService {
             return
         }
 
-        if self.pendingPlayVideoId != nil {
+        if let currentTrack = self.currentTrack {
+            await self.fetchAndApplyRadioQueue(for: currentTrack.videoId)
+            if self.queue.indices.contains(self.currentIndex + 1) {
+                self.pushForwardSkipStackIfLeavingIndex(for: self.currentIndex + 1)
+                await self.loadQueueSongForNavigation(at: self.currentIndex + 1)
+                await self.fetchMoreMixSongsIfNeeded()
+                await self.fillSmartShuffleWindow()
+                self.saveQueueForPersistence(syncWebQueue: false)
+            } else {
+                self.logger.debug("Ignoring next without a Kaset queue")
+            }
+        } else if self.pendingPlayVideoId != nil {
             self.logger.debug("Ignoring next without a Kaset queue")
         }
     }
