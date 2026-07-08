@@ -4,6 +4,9 @@ import Foundation
 
 @MainActor
 extension PlayerService {
+    private static let queueNavigationInFlightProtectionGrace: Duration = .seconds(20)
+    private static let queueNavigationConfirmedProtectionGrace: Duration = .seconds(8)
+
     private func applyDeferredRestoredMetadata(
         title: String,
         artist: String,
@@ -216,6 +219,59 @@ extension PlayerService {
         return nil
     }
 
+    func protectQueueNavigationTarget(_ videoId: String) {
+        self.protectedQueueNavigationVideoId = videoId
+        self.protectedQueueNavigationStartedAt = ContinuousClock.now
+        self.protectedQueueNavigationConfirmedAt = nil
+    }
+
+    private func confirmQueueNavigationTarget(_ videoId: String) {
+        guard self.protectedQueueNavigationVideoId == videoId else { return }
+        if self.protectedQueueNavigationConfirmedAt == nil {
+            self.protectedQueueNavigationConfirmedAt = ContinuousClock.now
+        }
+    }
+
+    @discardableResult
+    private func clearExpiredQueueNavigationProtectionIfNeeded() -> Bool {
+        let now = ContinuousClock.now
+        if let confirmedAt = self.protectedQueueNavigationConfirmedAt {
+            guard now - confirmedAt >= Self.queueNavigationConfirmedProtectionGrace else { return false }
+        } else if let startedAt = self.protectedQueueNavigationStartedAt {
+            guard now - startedAt >= Self.queueNavigationInFlightProtectionGrace else { return false }
+        } else {
+            return false
+        }
+
+        self.protectedQueueNavigationVideoId = nil
+        self.protectedQueueNavigationStartedAt = nil
+        self.protectedQueueNavigationConfirmedAt = nil
+        return true
+    }
+
+    private func rejectProtectedQueueNavigationDriftIfNeeded(
+        observedVideoId: String,
+        currentQueueSong: Song,
+        thumbnailUrl: String
+    ) -> Bool {
+        self.clearExpiredQueueNavigationProtectionIfNeeded()
+
+        guard let normalizedObservedVideoId = self.normalizedObservedVideoId(observedVideoId),
+              let protectedVideoId = self.protectedQueueNavigationVideoId,
+              currentQueueSong.videoId == protectedVideoId,
+              normalizedObservedVideoId != protectedVideoId
+        else { return false }
+
+        self.logger.info(
+            "Ignoring stale in-queue metadata for \(normalizedObservedVideoId); keeping protected queue target \(protectedVideoId)"
+        )
+        self.keepQueueSongVisible(currentQueueSong, thumbnailUrl: thumbnailUrl)
+        Task {
+            await self.play(song: currentQueueSong, webLoadStrategy: .forceFullPageWhenSameVideoId)
+        }
+        return true
+    }
+
     private func isRepeatAllWraparoundTrackEnd(
         observedVideoId: String,
         expectedCurrentVideoId: String
@@ -289,6 +345,10 @@ extension PlayerService {
         thumbnailUrl: String,
         trackChanged: Bool
     ) -> Bool {
+        if self.clearExpiredQueueNavigationProtectionIfNeeded() {
+            self.isKasetInitiatedPlayback = false
+        }
+
         guard self.isKasetInitiatedPlayback, !self.queue.isEmpty else {
             return false
         }
@@ -300,6 +360,7 @@ extension PlayerService {
 
         let matchesObservedVideo = self.normalizedObservedVideoId(observedVideoId) == intendedSong.videoId
         if matchesObservedVideo, self.shouldKeepQueueMetadata(title: title, artist: artist, song: intendedSong) {
+            self.confirmQueueNavigationTarget(intendedSong.videoId)
             self.isKasetInitiatedPlayback = false
             self.logger.debug(
                 "Confirmed intended videoId \(intendedSong.videoId) with incomplete metadata '\(title)'; keeping queue metadata"
@@ -314,6 +375,7 @@ extension PlayerService {
             artist: artist,
             song: intendedSong
         ) {
+            self.confirmQueueNavigationTarget(intendedSong.videoId)
             self.isKasetInitiatedPlayback = false
             self.logger.debug("Confirmed Kaset-initiated playback for '\(intendedSong.title)'")
             return false
@@ -472,6 +534,14 @@ extension PlayerService {
               currentQueueSong.videoId != observedVideoId
         else {
             return false
+        }
+
+        if self.rejectProtectedQueueNavigationDriftIfNeeded(
+            observedVideoId: observedVideoId,
+            currentQueueSong: currentQueueSong,
+            thumbnailUrl: thumbnailUrl
+        ) {
+            return true
         }
 
         // Repeat one: autoplay can swap the video before title/artist update, so `trackChanged` may still be false.

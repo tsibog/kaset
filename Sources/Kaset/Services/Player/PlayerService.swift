@@ -595,6 +595,19 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     /// only trusts injections after the WebView script confirms the queue payload was swapped.
     var pendingWebQueueInjectionVideoId: String?
 
+    /// Video ID that Kaset just selected through deterministic queue navigation.
+    /// WebView metadata can arrive out of order around manual/media-key skips; keep
+    /// this target protected briefly so stale in-queue rows cannot realign `currentIndex` backward.
+    var protectedQueueNavigationVideoId: String?
+
+    /// Instant when the protected queue target was first confirmed by WebView metadata.
+    /// `nil` means the target is still in flight and should remain protected.
+    var protectedQueueNavigationConfirmedAt: ContinuousClock.Instant?
+
+    /// Instant when the protected queue target was requested. Used to expire
+    /// in-flight protection if WebView never confirms the requested video.
+    var protectedQueueNavigationStartedAt: ContinuousClock.Instant?
+
     /// Grace period instant - don't auto-close video window shortly after opening (uses monotonic clock)
     var videoWindowOpenedAt: ContinuousClock.Instant?
 

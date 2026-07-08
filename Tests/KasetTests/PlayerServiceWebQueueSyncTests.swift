@@ -133,6 +133,66 @@ struct PlayerServiceWebQueueSyncTests {
         #expect(self.playerService.pendingPlayVideoId == "v2")
     }
 
+    @Test("Stale metadata after manual next confirmation cannot realign backward")
+    func staleMetadataAfterManualNextConfirmationCannotRealignBackward() async {
+        let songs = [
+            Song(id: "1", title: "Song 1", artists: [], album: nil, duration: 180, thumbnailURL: nil, videoId: "v1"),
+            Song(id: "2", title: "Song 2", artists: [], album: nil, duration: 200, thumbnailURL: nil, videoId: "v2"),
+            Song(id: "3", title: "Song 3", artists: [], album: nil, duration: 220, thumbnailURL: nil, videoId: "v3"),
+        ]
+        await self.playerService.playQueue(songs, startingAt: 0)
+        self.playerService.state = .playing
+
+        await self.playerService.next()
+        #expect(self.playerService.currentIndex == 1)
+
+        self.playerService.updateTrackMetadata(
+            title: "Song 2",
+            artist: "",
+            thumbnailUrl: "",
+            videoId: "v2"
+        )
+
+        // Stale old-song metadata can still arrive after the intended video was
+        // briefly confirmed. It must not be treated as a legitimate native
+        // in-queue move back to the previous item.
+        self.playerService.updateTrackMetadata(
+            title: "Song 1",
+            artist: "",
+            thumbnailUrl: "",
+            videoId: "v1"
+        )
+
+        #expect(self.playerService.currentIndex == 1)
+        #expect(self.playerService.currentTrack?.videoId == "v2")
+        #expect(self.playerService.pendingPlayVideoId == "v2")
+    }
+
+    @Test("Expired unconfirmed manual next protection allows later in-queue movement")
+    func expiredUnconfirmedManualNextProtectionAllowsLaterInQueueMovement() async {
+        let songs = [
+            Song(id: "1", title: "Song 1", artists: [], album: nil, duration: 180, thumbnailURL: nil, videoId: "v1"),
+            Song(id: "2", title: "Song 2", artists: [], album: nil, duration: 200, thumbnailURL: nil, videoId: "v2"),
+            Song(id: "3", title: "Song 3", artists: [], album: nil, duration: 220, thumbnailURL: nil, videoId: "v3"),
+        ]
+        await self.playerService.playQueue(songs, startingAt: 0)
+        self.playerService.state = .playing
+
+        await self.playerService.next()
+        #expect(self.playerService.currentIndex == 1)
+        self.playerService.protectedQueueNavigationStartedAt = ContinuousClock.now - .seconds(25)
+
+        self.playerService.updateTrackMetadata(
+            title: "Song 3",
+            artist: "",
+            thumbnailUrl: "",
+            videoId: "v3"
+        )
+
+        #expect(self.playerService.currentIndex == 2)
+        #expect(self.playerService.currentTrack?.videoId == "v3")
+    }
+
     @Test("Manual next ignores native injection marker and loads target deterministically")
     func manualNextIgnoresNativeInjectionMarkerAndLoadsTargetDeterministically() async {
         let songs = [

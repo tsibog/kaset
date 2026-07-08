@@ -478,6 +478,7 @@ extension PlayerService {
         self.currentIndex = index
         self.progress = 0
         self.duration = song.duration ?? 0
+        self.protectQueueNavigationTarget(song.videoId)
         await self.play(song: song)
         self.saveQueueForPersistence()
     }
@@ -493,6 +494,7 @@ extension PlayerService {
         self.pendingPlayVideoId = song.videoId
         self.progress = 0
         self.duration = song.duration ?? 0
+        self.protectQueueNavigationTarget(song.videoId)
         self.state = .loading
         self.isKasetInitiatedPlayback = true
         self.songNearingEnd = false
