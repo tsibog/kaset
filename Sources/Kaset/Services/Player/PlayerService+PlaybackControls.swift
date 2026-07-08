@@ -418,7 +418,7 @@ extension PlayerService {
         }
 
         if self.pendingPlayVideoId != nil {
-            SingletonPlayerWebView.shared.next()
+            self.logger.debug("Ignoring next without a Kaset queue")
         }
     }
 
@@ -457,7 +457,7 @@ extension PlayerService {
         if self.progress > 3 {
             await self.seek(to: 0)
         } else if self.pendingPlayVideoId != nil {
-            SingletonPlayerWebView.shared.previous()
+            self.logger.debug("Ignoring previous without a Kaset queue")
         }
     }
 
