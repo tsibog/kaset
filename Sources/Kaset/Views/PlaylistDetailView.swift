@@ -791,6 +791,7 @@ private struct PlaylistTrackRow<Menu: View>: View {
         .disabled(!self.track.isPlayable)
         .queuedFeedback(for: self.track)
         .hoverQueueable(for: self.track)
+        .draggable(self.track)
         .onHover { hovering in
             self.isHovered = hovering
         }

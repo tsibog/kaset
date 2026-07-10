@@ -9,6 +9,7 @@ struct Sidebar: View {
 
     @Binding var selection: NavigationItem?
     @Binding var pinnedSelection: SidebarPinnedItem?
+    let client: any YTMusicClientProtocol
     @Environment(AuthService.self) private var authService
     @Environment(SidebarPinnedItemsManager.self) private var sidebarPinnedItemsManager
     @Environment(PodcastsAvailabilityService.self) private var podcastsAvailability
@@ -129,6 +130,22 @@ struct Sidebar: View {
         ) {
             self.selectPinnedItem(item)
         }
+        .dropDestination(for: Song.self) { droppedSongs, _ in
+            guard case .playlist = item.itemType else { return false }
+            for song in droppedSongs {
+                Task {
+                    try? await self.client.addSongToPlaylist(
+                        videoId: song.videoId,
+                        playlistId: item.contentId,
+                        allowDuplicate: false
+                    )
+                    SongActionsHelper.invalidateLibraryResponseCaches()
+                    HapticService.toggle()
+                    DiagnosticsLogger.api.info("Drag-drop: added '\(song.title)' to playlist '\(item.title)'")
+                }
+            }
+            return true
+        }
         .contextMenu {
             Button {
                 self.sidebarPinnedItemsManager.moveUp(contentId: item.contentId)
@@ -169,9 +186,15 @@ struct Sidebar: View {
 }
 
 #Preview {
-    Sidebar(selection: .constant(.home), pinnedSelection: .constant(nil))
+    let authService = AuthService()
+    let client: any YTMusicClientProtocol = if UITestConfig.isUITestMode {
+        MockUITestYTMusicClient()
+    } else {
+        YTMusicClient(authService: authService, webKitManager: .shared)
+    }
+    Sidebar(selection: .constant(.home), pinnedSelection: .constant(nil), client: client)
         .frame(width: 220)
-        .environment(AuthService())
+        .environment(authService)
         .environment(SidebarPinnedItemsManager(skipLoad: true))
         .environment(PodcastsAvailabilityService())
 }
