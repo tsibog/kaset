@@ -77,7 +77,11 @@ struct HoverObservingRow<Content: View>: View {
             .onHover { hovering in
                 self.isHovered = hovering
                 if let song {
-                    self.hoveredTrackManager.setHovered(hovering ? song : nil)
+                    if hovering {
+                        self.hoveredTrackManager.setHovered(song)
+                    } else {
+                        self.hoveredTrackManager.clearIfMatched(song)
+                    }
                 }
             }
     }

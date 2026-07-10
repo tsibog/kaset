@@ -17,6 +17,15 @@ final class HoveredTrackManager {
     func setHovered(_ song: Song?) {
         self.hoveredSong = song
     }
+
+    /// Clears the hovered song only if it matches the given song.
+    /// Prevents a race where row A's hoverExit fires after row B's hoverEnter,
+    /// which would incorrectly clear row B's song.
+    func clearIfMatched(_ song: Song) {
+        if self.hoveredSong?.videoId == song.videoId {
+            self.hoveredSong = nil
+        }
+    }
 }
 
 // MARK: - HotkeyMonitor
@@ -42,12 +51,15 @@ final class HotkeyMonitor {
             // Only act when the app is frontmost (window is focused)
             guard NSApp.isActive else { return event }
 
-            // Q key (no modifiers — plain Q, not ⌘Q which quits)
-            // event.charactersIgnoringModifiers gives the base key
+            // Don't intercept if a text field or other text input has focus
+            // (e.g., user is typing in the search bar)
+            if NSApp.keyWindow?.firstResponder is NSText { return event }
+
+            // Q key with no modifiers (not ⌘Q, ⌃Q, ⌥Q, etc.)
+            // Subtract .capsLock from the mask check so the hotkey works with caps lock on.
             if event.charactersIgnoringModifiers?.lowercased() == "q",
-               event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty
+               event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock).isEmpty
             {
-                // No modifier keys (not ⌘Q, ⌃Q, etc.)
                 if let song = hoveredTrackManager.hoveredSong {
                     SongActionsHelper.addToQueueLast(song, playerService: playerService)
                     HapticService.toggle()

@@ -792,7 +792,11 @@ private struct PlaylistTrackRow<Menu: View>: View {
         .disabled(!self.track.isPlayable)
         .onHover { hovering in
             self.isHovered = hovering
-            self.hoveredTrackManager.setHovered(hovering ? self.track : nil)
+            if hovering {
+                self.hoveredTrackManager.setHovered(self.track)
+            } else {
+                self.hoveredTrackManager.clearIfMatched(self.track)
+            }
         }
         .contextMenu { self.menu() }
     }

@@ -47,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Save queue for persistence on next launch
         self.playerService?.saveQueueForPersistence()
         DiagnosticsLogger.player.info("Application will terminate - saved queue for persistence")
+        // Stop the keyboard shortcut monitor
+        HotkeyMonitor.shared.stop()
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {

@@ -67,7 +67,11 @@ struct HomeSectionItemCard: View {
                 self.isHovering = hovering
             }
             if let song = self.item.song {
-                self.hoveredTrackManager.setHovered(hovering ? song : nil)
+                if hovering {
+                    self.hoveredTrackManager.setHovered(song)
+                } else {
+                    self.hoveredTrackManager.clearIfMatched(song)
+                }
             }
         }
         .onChange(of: self.item.id) { _, _ in
