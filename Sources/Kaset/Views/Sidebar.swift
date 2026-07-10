@@ -134,14 +134,19 @@ struct Sidebar: View {
             guard case .playlist = item.itemType else { return false }
             for song in droppedSongs {
                 Task {
-                    try? await self.client.addSongToPlaylist(
-                        videoId: song.videoId,
-                        playlistId: item.contentId,
-                        allowDuplicate: false
-                    )
-                    SongActionsHelper.invalidateLibraryResponseCaches()
-                    HapticService.toggle()
-                    DiagnosticsLogger.api.info("Drag-drop: added '\(song.title)' to playlist '\(item.title)'")
+                    do {
+                        try await self.client.addSongToPlaylist(
+                            videoId: song.videoId,
+                            playlistId: item.contentId,
+                            allowDuplicate: false
+                        )
+                        SongActionsHelper.invalidateLibraryResponseCaches()
+                        HapticService.success()
+                        DiagnosticsLogger.api.info("Drag-drop: added '\(song.title)' to playlist '\(item.title)'")
+                    } catch {
+                        DiagnosticsLogger.api.error("Drag-drop: failed to add '\(song.title)' to playlist '\(item.title)': \(error.localizedDescription)")
+                        HapticService.error()
+                    }
                 }
             }
             return true
