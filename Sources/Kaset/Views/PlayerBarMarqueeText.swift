@@ -9,6 +9,9 @@ struct PlayerBarMarqueeText: View {
     let color: Color
     let height: CGFloat
     let reduceMotion: Bool
+    /// Alignment when the text fits and does not scroll. Defaults to leading (the classic player-bar
+    /// look); centred is opt-in for the centred-title chrome.
+    var restingAlignment: Alignment = .leading
 
     @State private var containerWidth: CGFloat = 0
     @State private var textWidth: CGFloat = 0
@@ -35,7 +38,11 @@ struct PlayerBarMarqueeText: View {
             }
             .fixedSize(horizontal: true, vertical: false)
             .offset(x: self.needsMarquee ? self.offset : 0)
-            .frame(width: proxy.size.width, height: self.renderHeight, alignment: .leading)
+            .frame(
+                width: proxy.size.width,
+                height: self.renderHeight,
+                alignment: self.needsMarquee ? .leading : self.restingAlignment
+            )
             .clipped()
             .mask(self.maskView(phase: self.fadeMaskPhase))
             .overlay(alignment: .leading) {

@@ -7,11 +7,15 @@ import SwiftUI
 /// Player bar shown at the bottom of the content area, styled like Apple Music with Liquid Glass.
 struct PlayerBar: View { // swiftlint:disable:this type_body_length
     private static let brandAccent = PackageResourceLookup.brandAccent
-    private static let fullSongInfoWidth: CGFloat = 234
-    private static let compactSongInfoWidth: CGFloat = 116
+    /// Left (thumbnail) and right (playback options) columns share a width so the centre zone is
+    /// symmetric under the window — the title reads as truly centred.
+    private static let sideColumnWidth: CGFloat = 142
+    private static let barHeight: CGFloat = 116
+    private static let thumbnailSize: CGFloat = 60
 
     @Environment(AuthService.self) private var authService
     @Environment(PlayerService.self) private var playerService
+    @Environment(NowPlayingTracklistProvider.self) private var tracklistProvider: NowPlayingTracklistProvider?
     @Environment(FavoritesManager.self) private var favoritesManager
     @Environment(SongLikeStatusManager.self) private var likeStatusManager
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -35,7 +39,6 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
     @State private var resolvedArtist: Artist?
     @State private var resolvedAlbum: Playlist?
     @State private var isResolvingArtist = false
-    @State private var isResolvingAlbum = false
 
     /// Cached formatted progress string to avoid repeated formatting.
     @State private var formattedProgress: String = "0:00"
@@ -45,26 +48,21 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
 
     var body: some View {
         CompatGlassContainer(spacing: 0) {
-            GeometryReader { proxy in
-                let usesCompactDetails = proxy.size.width <= PlayerBarLayout.compactDetailsBreakpoint
+            GeometryReader { _ in
+                HStack(spacing: 12) {
+                    self.songInfoSection
+                        .frame(width: Self.sideColumnWidth, height: Self.barHeight)
 
-                HStack(spacing: 10) {
-                    self.songInfoSection(usesCompactDetails: usesCompactDetails)
-                        .frame(
-                            width: usesCompactDetails ? Self.compactSongInfoWidth : Self.fullSongInfoWidth,
-                            height: 52
-                        )
-
-                    self.progressSection
+                    self.centerSection
                         .frame(maxWidth: .infinity)
-                        .frame(height: 52)
+                        .frame(height: Self.barHeight)
 
                     self.playbackOptionsSection
-                        .frame(width: 142, height: 52)
+                        .frame(width: Self.sideColumnWidth, height: Self.barHeight)
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 52)
+            .frame(height: Self.barHeight)
             .compatGlass(interactive: true, in: .capsule)
             .compatGlassID("playerBar", in: self.playerNamespace)
         }
@@ -171,25 +169,15 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
 
     // MARK: - Song Info
 
-    private func songInfoSection(usesCompactDetails: Bool) -> some View {
-        HStack(spacing: 8) {
-            self.thumbnailView
-
-            if !usesCompactDetails {
-                self.songDetailsView
-                    .frame(width: 110, alignment: .leading)
+    private var songInfoSection: some View {
+        self.thumbnailView
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contextMenu {
+                if let track = self.playerService.currentTrack {
+                    self.currentSongContextMenu(for: track)
+                }
             }
-
-            self.songActionButtons
-        }
-        .padding(.leading, 14)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .contextMenu {
-            if let track = self.playerService.currentTrack {
-                self.currentSongContextMenu(for: track)
-            }
-        }
     }
 
     @ViewBuilder
@@ -210,15 +198,15 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
             }
         } else {
             PlayerBarArtworkView(
-                width: 32,
-                height: 32,
-                cornerRadius: 6,
+                width: Self.thumbnailSize,
+                height: Self.thumbnailSize,
+                cornerRadius: 9,
                 showsHoverOverlay: false
             ) {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .fill(.quaternary)
                     .overlay {
-                        CassetteIcon(size: 18)
+                        CassetteIcon(size: 26)
                             .foregroundStyle(.secondary)
                     }
             }
@@ -228,16 +216,15 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
 
     private func trackArtwork(for track: Song) -> some View {
         PlayerBarArtworkView(
-            width: 32,
-            height: 32,
-            cornerRadius: 6,
+            width: Self.thumbnailSize,
+            height: Self.thumbnailSize,
+            cornerRadius: 9,
             glowSources: self.artworkGlowSources(for: track),
             glowIdentity: self.artworkGlowIdentity(for: track),
-            glowTargetSize: CGSize(width: 64, height: 64),
-            showsHoverOverlay: self.canOpenCurrentAlbum || self.showsCurrentAlbumHoverOnly,
-            isLoading: self.isResolvingAlbum
+            glowTargetSize: CGSize(width: 96, height: 96),
+            showsHoverOverlay: self.canOpenCurrentAlbum
         ) {
-            SongThumbnailView(song: track, size: 32, cornerRadius: 6)
+            SongThumbnailView(song: track, size: Self.thumbnailSize, cornerRadius: 9)
         }
     }
 
@@ -260,29 +247,6 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
         }
     }
 
-    private var songDetailsView: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            PlayerBarMarqueeText(
-                text: self.playerService.currentTrack?.title ?? String(localized: "Not Playing"),
-                font: .system(size: 13),
-                color: .primary,
-                height: 13,
-                reduceMotion: self.reduceMotion
-            )
-            .id(self.currentTitleIdentity)
-            .accessibilityIdentifier(AccessibilityID.PlayerBar.trackTitle)
-
-            PlayerBarMetadataButton(
-                text: self.artistName,
-                isEnabled: self.canOpenCurrentArtist,
-                isLoading: self.isResolvingArtist,
-                accessibilityIdentifier: AccessibilityID.PlayerBar.trackArtist,
-                action: self.openCurrentArtist
-            )
-        }
-        .frame(height: 29, alignment: .leading)
-    }
-
     private var currentTitleIdentity: String {
         [
             self.playerService.currentTrack?.videoId ?? "none",
@@ -300,7 +264,7 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
     private var canOpenCurrentAlbum: Bool {
         self.playerService.currentTrack != nil
             && self.navigationAction.openAlbum != nil
-            && (self.currentAlbumTarget != nil || (self.currentArtistSearchName != nil && self.playerService.ytMusicClient != nil))
+            && self.currentAlbumTarget != nil
             && !self.isCurrentAlbumTarget
             && !self.isResolvingCurrentRouteAlbum
     }
@@ -319,10 +283,6 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
         else { return false }
 
         return album.id == currentRouteAlbumID
-    }
-
-    private var showsCurrentAlbumHoverOnly: Bool {
-        self.isCurrentAlbumTarget || self.isResolvingCurrentRouteAlbum
     }
 
     private var isResolvingCurrentRouteAlbum: Bool {
@@ -373,49 +333,106 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
         )
     }
 
-    @ViewBuilder
-    private var songActionButtons: some View {
-        if self.hasPersonalAccount {
-            HStack(spacing: 6) {
-                PlayerBarIconButton(
-                    action: self.likeCurrentTrack,
-                    isSelected: self.playerService.currentTrackLikeStatus == .like,
-                    accessibilityID: AccessibilityID.PlayerBar.likeButton,
-                    accessibilityLabel: String(localized: "Like"),
-                    accessibilityValue: self.playerService.currentTrackLikeStatus == .like ? String(localized: "Liked") : String(localized: "Not liked")
-                ) {
-                    Image(systemName: self.playerService.currentTrackLikeStatus == .like ? "hand.thumbsup.fill" : "hand.thumbsup")
-                        .font(.system(size: 16, weight: .regular))
-                        .frame(width: 10, height: 16)
-                        .foregroundStyle(self.playerService.currentTrackLikeStatus == .like ? Self.brandAccent : .primary)
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .symbolEffect(.bounce, value: self.playerService.currentTrackLikeStatus == .like)
-                .disabled(self.playerService.currentTrack == nil)
+    // MARK: - Center Section
 
-                PlayerBarIconButton(
-                    action: self.dislikeCurrentTrack,
-                    isSelected: self.playerService.currentTrackLikeStatus == .dislike,
-                    accessibilityID: AccessibilityID.PlayerBar.dislikeButton,
-                    accessibilityLabel: String(localized: "Dislike"),
-                    accessibilityValue: self.playerService.currentTrackLikeStatus == .dislike ? String(localized: "Disliked") : String(localized: "Not disliked")
-                ) {
-                    Image(systemName: self.playerService.currentTrackLikeStatus == .dislike ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-                        .font(.system(size: 16, weight: .regular))
-                        .frame(width: 10, height: 16)
-                        .foregroundStyle(self.playerService.currentTrackLikeStatus == .dislike ? Self.brandAccent : .primary)
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .symbolEffect(.bounce, value: self.playerService.currentTrackLikeStatus == .dislike)
-                .disabled(self.playerService.currentTrack == nil)
+    /// Centered identity block (title + channel/sub-track) stacked above the transport + seek bar.
+    private var centerSection: some View {
+        VStack(spacing: 4) {
+            self.centerTitleBlock
+                .frame(height: 34)
+
+            self.progressSection
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.top, 12)
+    }
+
+    private var centerTitleBlock: some View {
+        VStack(spacing: 2) {
+            PlayerBarMarqueeText(
+                text: self.playerService.currentTrack?.title ?? String(localized: "Not Playing"),
+                font: .system(size: 14, weight: .semibold),
+                color: .primary,
+                height: 17,
+                reduceMotion: self.reduceMotion,
+                restingAlignment: .center
+            )
+            .id(self.currentTitleIdentity)
+            .frame(maxWidth: 380)
+            .accessibilityIdentifier(AccessibilityID.PlayerBar.trackTitle)
+
+            if let sub = self.currentSubTrack {
+                self.subTrackChip(sub)
+            } else {
+                PlayerBarMetadataButton(
+                    text: self.artistName,
+                    isEnabled: self.canOpenCurrentArtist,
+                    isLoading: self.isResolvingArtist,
+                    accessibilityIdentifier: AccessibilityID.PlayerBar.trackArtist,
+                    alignment: .center,
+                    action: self.openCurrentArtist
+                )
             }
         }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// The active mix sub-track plus its position within the tracklist.
+    private struct CurrentSubTrack {
+        let entry: MixTrackEntry
+        let index: Int
+        let count: Int
+    }
+
+    /// The active mix sub-track plus its position, or nil for non-mix playback.
+    private var currentSubTrack: CurrentSubTrack? {
+        guard let tracklist = self.tracklistProvider?.tracklist,
+              let entry = self.tracklistProvider?.currentEntry(at: self.playerService.progress),
+              let index = tracklist.entries.firstIndex(where: { $0.id == entry.id })
+        else { return nil }
+        return CurrentSubTrack(entry: entry, index: index, count: tracklist.entries.count)
+    }
+
+    private func subTrackChip(_ sub: CurrentSubTrack) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(Self.brandAccent)
+                .frame(width: 5, height: 5)
+
+            Text(self.subTrackLabel(sub.entry))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Text(verbatim: "· \(sub.index + 1)/\(sub.count)")
+                .foregroundStyle(Self.brandAccent.opacity(0.6))
+        }
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(Self.brandAccent)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background {
+            Capsule(style: .continuous)
+                .fill(Self.brandAccent.opacity(0.12))
+                .overlay {
+                    Capsule(style: .continuous)
+                        .strokeBorder(Self.brandAccent.opacity(0.3), lineWidth: 0.6)
+                }
+        }
+        .accessibilityElement()
+        .accessibilityLabel(Text("Now playing: \(self.subTrackLabel(sub.entry)), track \(sub.index + 1) of \(sub.count)"))
+    }
+
+    private func subTrackLabel(_ entry: MixTrackEntry) -> String {
+        if let artist = entry.artist, !artist.isEmpty {
+            return "\(artist) — \(entry.title)"
+        }
+        return entry.title
     }
 
     // MARK: - Progress
 
     private var progressSection: some View {
-        ZStack(alignment: .top) {
+        VStack(spacing: 6) {
             if case let .error(message) = playerService.state {
                 self.errorView(message: message)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -429,6 +446,7 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
                     remainingText: self.isSeeking
                         ? "-\(self.formatTime(max(0, self.playerService.duration - self.seekValue * self.playerService.duration)))"
                         : self.formattedRemaining,
+                    segments: self.progressSegments,
                     isLive: self.playerService.isCurrentItemLive,
                     canSeek: self.canSeek,
                     isLoading: self.isProgressLoading,
@@ -440,13 +458,37 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
                         self.performSeek()
                     }
                 )
-                .padding(.top, 18)
             }
 
             self.progressActionButtons
-                .padding(.top, 2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Sub-track segments for the seek bar, derived from the now-playing tracklist. Empty for
+    /// non-mix items and live streams, which keeps the plain continuous bar.
+    private var progressSegments: [PlayerBarProgressSegment] {
+        guard let tracklist = self.tracklistProvider?.tracklist,
+              self.playerService.duration > 0,
+              !self.playerService.isCurrentItemLive
+        else { return [] }
+
+        let duration = self.playerService.duration
+        let entries = tracklist.entries
+        let count = entries.count
+        return entries.enumerated().map { index, entry in
+            let end = entry.endTime ?? duration
+            return PlayerBarProgressSegment(
+                id: entry.id.uuidString,
+                start: entry.startTime / duration,
+                end: end / duration,
+                index: index,
+                count: count,
+                title: entry.title,
+                subtitle: entry.artist,
+                rangeText: "\(self.formatTime(entry.startTime)) – \(self.formatTime(end))"
+            )
+        }
     }
 
     private var progressActionButtons: some View {
@@ -894,17 +936,10 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
         self.authService.hasPersonalAccount
     }
 
-    private func likeCurrentTrack() {
-        guard self.hasPersonalAccount else { return }
-        HapticService.toggle()
-        self.playerService.likeCurrentTrack()
-    }
-
     private func prepareCurrentNavigationTargets() async {
         self.resolvedArtist = nil
         self.resolvedAlbum = nil
         self.isResolvingArtist = false
-        self.isResolvingAlbum = false
 
         guard self.playerService.currentTrack != nil,
               let client = self.playerService.ytMusicClient
@@ -960,31 +995,11 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
     }
 
     private func openCurrentAlbum() {
-        guard self.canOpenCurrentAlbum else { return }
-        guard !self.isResolvingAlbum else { return }
+        // `canOpenCurrentAlbum` already requires a concretely resolved `currentAlbumTarget`, so the
+        // affordance never appears before an album is known — there's nothing to resolve on tap.
+        guard self.canOpenCurrentAlbum, let album = self.currentAlbumTarget else { return }
         HapticService.toggle()
-
-        if let album = self.currentAlbumTarget {
-            self.openAlbum(album, playsHaptic: false)
-            return
-        }
-
-        guard let track = self.playerService.currentTrack,
-              let client = self.playerService.ytMusicClient
-        else { return }
-
-        let identity = self.currentTitleIdentity
-        self.isResolvingAlbum = true
-
-        Task {
-            let album = await self.resolveAlbum(for: track, client: client)
-            guard !Task.isCancelled, self.currentTitleIdentity == identity else { return }
-            self.resolvedAlbum = album
-            self.isResolvingAlbum = false
-
-            guard let album else { return }
-            self.openAlbum(album, playsHaptic: false)
-        }
+        self.openAlbum(album, playsHaptic: false)
     }
 
     private func openArtist(_ artist: Artist, playsHaptic: Bool = true) {
@@ -1096,12 +1111,6 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
     private func matchesSearchResultTitle(_ title: String, query: String) -> Bool {
         let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(query)
         return normalizedTitle == .orderedSame
-    }
-
-    private func dislikeCurrentTrack() {
-        guard self.hasPersonalAccount else { return }
-        HapticService.toggle()
-        self.playerService.dislikeCurrentTrack()
     }
 
     private func showAirPlayPicker() {
@@ -1252,6 +1261,7 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
 #Preview {
     PlayerBar()
         .environment(PlayerService())
+        .environment(NowPlayingTracklistProvider(parser: nil))
         .environment(AuthService())
         .environment(FavoritesManager.shared)
         .environment(SongLikeStatusManager.shared)
