@@ -185,7 +185,10 @@ final class MockYouTubeClient: YouTubeClientProtocol {
         return response
     }
 
+    private(set) var getWatchNextCallCount = 0
+
     func getWatchNext(videoId _: String) async throws -> WatchNextData {
+        self.getWatchNextCallCount += 1
         if let error {
             throw error
         }

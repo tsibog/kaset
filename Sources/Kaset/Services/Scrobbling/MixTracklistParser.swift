@@ -34,9 +34,9 @@ final class MixTracklistParser {
             return tracklist
         }
 
-        // Tier 2: Description parsing (deferred — needs WatchNextParser extension for description extraction)
-        // TODO: Extract description text from engagementPanels in the next response,
-        // then regex parse for timestamp patterns, then Foundation Models fallback.
+        // Tier 2 (not yet implemented): description parsing. Would extract description text from
+        // the next response's engagementPanels, regex-parse timestamp patterns, then fall back to
+        // Foundation Models. Requires a WatchNextParser extension for description extraction.
 
         return nil
     }
@@ -49,17 +49,13 @@ final class MixTracklistParser {
             let watchNextData = try await self.youTubeClient.getWatchNext(videoId: videoId)
             let chapters = watchNextData.chapters
 
-            // Only treat as a mix if there are 3+ chapters
-            guard chapters.count >= 3 else { return nil }
-
             // Convert chapters to MixTrackEntry, computing endTime from the next chapter's startTime
             let entries = chapters.enumerated().map { index, chapter -> MixTrackEntry in
-                let endTime: TimeInterval?
-                if index + 1 < chapters.count {
-                    endTime = chapters[index + 1].startTime
+                let endTime: TimeInterval? = if index + 1 < chapters.count {
+                    chapters[index + 1].startTime
                 } else {
                     // Last chapter — endTime stays nil (until end of video)
-                    endTime = nil
+                    nil
                 }
 
                 return MixTrackEntry(
@@ -69,7 +65,10 @@ final class MixTracklistParser {
                 )
             }
 
-            return MixTracklist(videoId: videoId, entries: entries, source: .chapters)
+            // A handful of chapters (intro/outro) isn't a real tracklist — MixTracklist.isMix decides.
+            let tracklist = MixTracklist(videoId: videoId, entries: entries, source: .chapters)
+            guard tracklist.isMix else { return nil }
+            return tracklist
         } catch {
             self.logger.debug("Chapter extraction failed for \(videoId): \(error.localizedDescription)")
             return nil

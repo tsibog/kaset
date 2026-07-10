@@ -27,7 +27,7 @@ struct MixTrackEntry: Identifiable, Hashable {
     /// Duration of this sub-track in seconds, if end time is known.
     var duration: TimeInterval? {
         guard let endTime else { return nil }
-        return endTime - startTime
+        return endTime - self.startTime
     }
 
     init(
@@ -50,18 +50,25 @@ struct MixTrackEntry: Identifiable, Hashable {
     /// If the title has no dash, the full title is used as the track title
     /// and the artist is left nil (caller should provide a fallback).
     init(fromChapterTitle title: String, startTime: TimeInterval, endTime: TimeInterval?) {
+        let parsed = Self.parseArtistTitle(from: title)
         self.id = UUID()
         self.startTime = startTime
         self.endTime = endTime
         self.source = .chapters
+        self.artist = parsed.artist
+        self.title = parsed.title
+    }
 
-        if let dashRange = title.range(of: " - ") {
-            self.artist = String(title[..<dashRange.lowerBound])
-            self.title = String(title[dashRange.upperBound...])
-        } else {
-            self.artist = nil
-            self.title = title
+    /// Splits a chapter/description label like "Artist - Title" into its parts, trimming whitespace.
+    /// Splits on the FIRST " - "; if absent, the whole string is the title and the artist is nil
+    /// (the caller supplies a fallback). Shared by the chapter and description tracklist tiers.
+    static func parseArtistTitle(from raw: String) -> (artist: String?, title: String) {
+        guard let dashRange = raw.range(of: " - ") else {
+            return (nil, raw.trimmingCharacters(in: .whitespaces))
         }
+        let artist = raw[..<dashRange.lowerBound].trimmingCharacters(in: .whitespaces)
+        let title = raw[dashRange.upperBound...].trimmingCharacters(in: .whitespaces)
+        return (artist.isEmpty ? nil : artist, title)
     }
 }
 
@@ -89,16 +96,16 @@ struct MixTracklist: Hashable {
     /// is before the first entry.
     func entry(at progress: TimeInterval) -> MixTrackEntry? {
         // Binary search for the last entry with startTime <= progress
-        guard !entries.isEmpty else { return nil }
-        guard progress >= entries.first!.startTime else { return nil }
+        guard !self.entries.isEmpty else { return nil }
+        guard progress >= self.entries.first!.startTime else { return nil }
 
         var low = 0
-        var high = entries.count - 1
+        var high = self.entries.count - 1
         var result = 0
 
         while low <= high {
             let mid = (low + high) / 2
-            if entries[mid].startTime <= progress {
+            if self.entries[mid].startTime <= progress {
                 result = mid
                 low = mid + 1
             } else {
@@ -106,12 +113,15 @@ struct MixTracklist: Hashable {
             }
         }
 
-        return entries[result]
+        return self.entries[result]
     }
 
-    /// Whether this tracklist has enough entries to be treated as a mix.
+    /// Minimum entry count for a tracklist to be treated as a mix.
     /// A single track with 2 chapters is not a mix; 3+ entries indicates a real tracklist.
+    static let minEntryCount = 3
+
+    /// Whether this tracklist has enough entries to be treated as a mix.
     var isMix: Bool {
-        entries.count >= 3
+        self.entries.count >= Self.minEntryCount
     }
 }
