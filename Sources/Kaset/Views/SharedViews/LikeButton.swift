@@ -70,20 +70,13 @@ struct HoverObservingRow<Content: View>: View {
     var song: Song?
     @ViewBuilder let content: (Bool) -> Content
     @State private var isHovered: Bool = false
-    @Environment(HoveredTrackManager.self) private var hoveredTrackManager
 
     var body: some View {
         self.content(self.isHovered)
             .queuedFeedback(for: self.song)
+            .hoverQueueable(for: self.song)
             .onHover { hovering in
                 self.isHovered = hovering
-                if let song {
-                    if hovering {
-                        self.hoveredTrackManager.setHovered(song)
-                    } else {
-                        self.hoveredTrackManager.clearIfMatched(song)
-                    }
-                }
             }
     }
 }
