@@ -514,4 +514,125 @@ struct ScrobblingCoordinatorTests {
         let thresholdMet = accumulated >= duration * percentThreshold || accumulated >= minSeconds
         #expect(thresholdMet, "Threshold should be met at exactly 50% of duration")
     }
+
+    // MARK: - Mix-Mode Detection
+
+    private func makeWatchNextData(chapters: [YouTubeChapter]) -> WatchNextData {
+        WatchNextData(
+            videoTitle: "Long Mix",
+            viewCountText: nil,
+            publishedText: nil,
+            channel: nil,
+            related: [],
+            chapters: chapters
+        )
+    }
+
+    private func makeMixChapters(videoId: String = "mix1", count: Int = 3) -> [YouTubeChapter] {
+        (0 ..< count).map { index in
+            YouTubeChapter(
+                videoId: videoId,
+                title: "Artist \(index) - Track \(index)",
+                startTime: TimeInterval(index) * 600,
+                endTime: TimeInterval(index + 1) * 600,
+                timeText: nil,
+                thumbnailURL: nil
+            )
+        }
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(2),
+        _ condition: @MainActor () -> Bool
+    ) async {
+        let deadline = ContinuousClock.now + timeout
+        while !condition(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// Regression: the mix-tracklist fetch is gated on track duration, which YouTube reports a beat
+    /// after the track object appears. A one-shot check at track-start always missed, so every mix
+    /// silently fell back to whole-video scrobbling. The fetch must retry from the poll loop until
+    /// duration is known, then fire exactly once.
+    @Test("Mix fetch is deferred until duration is known, then fires exactly once")
+    func mixFetchDeferredUntilDurationKnown() async throws {
+        let dir = try self.makeTemporaryDirectory()
+        defer { self.cleanupDirectory(dir) }
+
+        let mockYouTube = MockYouTubeClient()
+        mockYouTube.watchNextData = self.makeWatchNextData(chapters: self.makeMixChapters())
+        let parser = MixTracklistParser(youTubeClient: mockYouTube)
+
+        let mockService = MockScrobbleService()
+        mockService.authState = .connected(username: "testuser")
+        let settings = SettingsManager.shared
+        settings.setServiceEnabled("Mock", true)
+        defer { settings.setServiceEnabled("Mock", false) }
+
+        let playerService = PlayerService()
+        // Track is playing, but duration hasn't loaded yet (the race the fix addresses).
+        playerService.currentTrack = TestFixtures.makeSong(id: "mix1", title: "Long Mix", duration: nil)
+        playerService.state = .playing
+        playerService.duration = 0
+
+        let coordinator = ScrobblingCoordinator(
+            playerService: playerService,
+            settingsManager: settings,
+            services: [mockService],
+            queue: ScrobbleQueue(directory: dir),
+            mixTracklistParser: parser
+        )
+        coordinator.startMonitoring()
+        defer { coordinator.stopMonitoring() }
+
+        // First poll ran synchronously in startMonitoring; duration unknown → no fetch attempted.
+        #expect(mockYouTube.getWatchNextCallCount == 0)
+
+        // Duration becomes known — the observed change must drive the deferred fetch.
+        playerService.duration = 3600
+        await self.waitUntil { mockYouTube.getWatchNextCallCount >= 1 }
+        #expect(mockYouTube.getWatchNextCallCount == 1)
+
+        // Further duration churn must not re-fetch (latched once per track).
+        playerService.duration = 3601
+        await self.waitUntil(timeout: .milliseconds(200)) { mockYouTube.getWatchNextCallCount > 1 }
+        #expect(mockYouTube.getWatchNextCallCount == 1)
+    }
+
+    @Test("Mix fetch is not attempted for short tracks even once duration is known")
+    func mixFetchSkippedForShortTracks() async throws {
+        let dir = try self.makeTemporaryDirectory()
+        defer { self.cleanupDirectory(dir) }
+
+        let mockYouTube = MockYouTubeClient()
+        mockYouTube.watchNextData = self.makeWatchNextData(chapters: self.makeMixChapters())
+        let parser = MixTracklistParser(youTubeClient: mockYouTube)
+
+        let mockService = MockScrobbleService()
+        mockService.authState = .connected(username: "testuser")
+        let settings = SettingsManager.shared
+        settings.setServiceEnabled("Mock", true)
+        defer { settings.setServiceEnabled("Mock", false) }
+
+        let playerService = PlayerService()
+        playerService.currentTrack = TestFixtures.makeSong(id: "short1", title: "Regular Song", duration: nil)
+        playerService.state = .playing
+        playerService.duration = 0
+
+        let coordinator = ScrobblingCoordinator(
+            playerService: playerService,
+            settingsManager: settings,
+            services: [mockService],
+            queue: ScrobbleQueue(directory: dir),
+            mixTracklistParser: parser
+        )
+        coordinator.startMonitoring()
+        defer { coordinator.stopMonitoring() }
+
+        // A 4-minute track never crosses the 10-minute mix threshold.
+        playerService.duration = 240
+        await self.waitUntil(timeout: .milliseconds(200)) { mockYouTube.getWatchNextCallCount >= 1 }
+        #expect(mockYouTube.getWatchNextCallCount == 0)
+    }
 }
