@@ -140,9 +140,11 @@ struct Sidebar: View {
     }
 
     private func sidebarPinnedRow(_ item: SidebarPinnedItem) -> some View {
-        let isPlaylist = {
-            if case .playlist = item.itemType { true } else { false }
-        }()
+        let isPlaylist = if case .playlist = item.itemType {
+            true
+        } else {
+            false
+        }
         let isDropTargeted = self.dropTargetPlaylistId == item.contentId
         let showDropFeedback = self.dropFeedbackPlaylistId == item.contentId
 
@@ -155,7 +157,7 @@ struct Sidebar: View {
             self.selectPinnedItem(item)
         }
         .overlay(alignment: .topTrailing) {
-            if isPlaylist && showDropFeedback {
+            if isPlaylist, showDropFeedback {
                 Image(systemName: "checkmark")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.white)
@@ -168,12 +170,7 @@ struct Sidebar: View {
             }
         }
         .animation(AppAnimation.bouncy, value: showDropFeedback)
-        .dropDestination(for: Song.self, isTargeted: Binding(
-            get: { self.dropTargetPlaylistId == item.contentId && isPlaylist },
-            set: { targeted in
-                self.dropTargetPlaylistId = targeted ? item.contentId : (self.dropTargetPlaylistId == item.contentId ? nil : self.dropTargetPlaylistId)
-            }
-        )) { droppedSongs, _ in
+        .dropDestination(for: Song.self) { droppedSongs, _ in
             guard isPlaylist else { return false }
             for song in droppedSongs {
                 Task {
@@ -194,6 +191,9 @@ struct Sidebar: View {
                 }
             }
             return true
+        } isTargeted: { targeted in
+            guard isPlaylist else { return }
+            self.dropTargetPlaylistId = targeted ? item.contentId : (self.dropTargetPlaylistId == item.contentId ? nil : self.dropTargetPlaylistId)
         }
         .contextMenu {
             Button {
