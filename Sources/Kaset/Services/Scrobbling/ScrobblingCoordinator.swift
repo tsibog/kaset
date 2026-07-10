@@ -14,6 +14,9 @@ final class ScrobblingCoordinator {
     /// All registered scrobbling service backends.
     let services: [any ScrobbleServiceProtocol]
     private let logger = DiagnosticsLogger.scrobbling
+    /// Clock used for all play-time accumulation timestamps. Injectable so tests can drive
+    /// deterministic thresholds without waiting on the real wall clock.
+    private let now: @MainActor () -> Date
 
     /// The offline scrobble queue.
     let queue: ScrobbleQueue
@@ -52,9 +55,13 @@ final class ScrobblingCoordinator {
     /// Snapshot of the tracked item's tracklist, captured while it is the current video. Finalize and
     /// per-sub-track handling read this rather than the live provider: `PlayerService.currentTrack`'s
     /// synchronous `didSet` resets the provider to the *incoming* video the instant a track changes,
-    /// which is before this coordinator's Observation-driven poll finalizes the *outgoing* one. Reading
-    /// the live provider during finalize would therefore see the wrong video and skip the outgoing
-    /// track's final scrobble check.
+    /// which is before this coordinator's Observation-driven poll finalizes the *outgoing* one.
+    ///
+    /// The concrete bug this prevents: `finalizeCurrentTrack` branches on whether the outgoing item was
+    /// a mix. If it read the live provider (already reset to nil for the incoming video) it would take
+    /// the single-track branch for a mix whose whole-track tracker had accumulated eligible play time
+    /// (e.g. the `duration == 0` window before the tracklist loaded) and enqueue a spurious scrobble
+    /// for the *whole mix*. Finalizing against the snapshot keeps it on the mix branch.
     private var trackedMixTracklist: MixTracklist?
 
     /// The sub-track currently being tracked within the mix.
@@ -89,18 +96,21 @@ final class ScrobblingCoordinator {
     ///   - services: Scrobbling service backends to fan out scrobbles to.
     ///   - queue: Persistent scrobble queue (injectable for testing).
     ///   - nowPlayingTracklistProvider: Shared source of the current item's sub-track breakdown (optional).
+    ///   - now: Clock used for play-time accumulation (injectable for testing).
     init(
         playerService: PlayerService,
         settingsManager: SettingsManager = .shared,
         services: [any ScrobbleServiceProtocol],
         queue: ScrobbleQueue = ScrobbleQueue(),
-        nowPlayingTracklistProvider: NowPlayingTracklistProvider? = nil
+        nowPlayingTracklistProvider: NowPlayingTracklistProvider? = nil,
+        now: @escaping @MainActor () -> Date = { Date() }
     ) {
         self.playerService = playerService
         self.settingsManager = settingsManager
         self.services = services
         self.queue = queue
         self.nowPlayingTracklistProvider = nowPlayingTracklistProvider
+        self.now = now
     }
 
     /// Note: Do not reference main actor properties here. All cleanup should be done in stopMonitoring().
@@ -210,7 +220,9 @@ final class ScrobblingCoordinator {
     }
 
     /// Core scrobbling logic — driven by observed playback mutations instead of a periodic timer.
-    private func pollPlayerState() {
+    /// Internal (not private) so tests can drive a single poll synchronously instead of waiting on
+    /// Observation callbacks and the real wall clock.
+    func pollPlayerState() {
         // Skip if no service is both enabled and connected
         guard self.hasAnyEnabledConnectedService else { return }
 
@@ -252,7 +264,7 @@ final class ScrobblingCoordinator {
             }
 
             // Accumulate play time (the tracker ignores seeks and paused spans internally)
-            self.trackTracker?.accumulate(progress: progress, isPlaying: isPlaying, now: Date())
+            self.trackTracker?.accumulate(progress: progress, isPlaying: isPlaying, now: self.now())
 
             // Send "now playing" once per track
             if self.trackTracker?.hasSentNowPlaying == false, isPlaying {
@@ -277,7 +289,7 @@ final class ScrobblingCoordinator {
         self.currentTrackArtist = track.artistsDisplay
         self.trackedSong = track
         self.trackTracker = PlaybackScrobbleTracker(
-            startTime: Date(),
+            startTime: self.now(),
             initialProgress: self.playerService.progress
         )
 
@@ -396,7 +408,7 @@ final class ScrobblingCoordinator {
         }
 
         // Accumulate play time (the tracker ignores seeks and paused spans internally)
-        self.mixEntryTracker?.accumulate(progress: progress, isPlaying: isPlaying, now: Date())
+        self.mixEntryTracker?.accumulate(progress: progress, isPlaying: isPlaying, now: self.now())
 
         // Send "now playing" once per sub-track
         if self.mixEntryTracker?.hasSentNowPlaying == false, isPlaying {
@@ -412,7 +424,7 @@ final class ScrobblingCoordinator {
     /// Starts tracking a new sub-track within the mix.
     private func startMixEntry(_ entry: MixTrackEntry, progress: TimeInterval) {
         self.currentMixEntry = entry
-        self.mixEntryTracker = PlaybackScrobbleTracker(startTime: Date(), initialProgress: progress)
+        self.mixEntryTracker = PlaybackScrobbleTracker(startTime: self.now(), initialProgress: progress)
         self.logger.debug("Mix sub-track started: \(entry.artist ?? "?") - \(entry.title) at \(String(format: "%.1f", entry.startTime))s")
     }
 
