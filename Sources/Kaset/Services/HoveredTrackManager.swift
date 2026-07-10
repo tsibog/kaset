@@ -2,6 +2,26 @@ import AppKit
 import Foundation
 import Observation
 
+// MARK: - HoverClaim
+
+/// A hover-claim guard: the last `set` wins, and `clearIfMatched` only clears
+/// when the key it's given still matches what's currently held. Guards the
+/// classic race where one row's hover-exit fires after a different row's
+/// hover-enter, which would otherwise wrongly clear the second row's claim.
+struct HoverClaim<Value, Key: Hashable> {
+    private let keyOf: (Value) -> Key
+
+    init(keyOf: @escaping (Value) -> Key) {
+        self.keyOf = keyOf
+    }
+
+    /// True if `current`'s key equals `key` — i.e. an exit event for `key` should clear `current`.
+    func matches(_ current: Value?, _ key: Key) -> Bool {
+        guard let current else { return false }
+        return self.keyOf(current) == key
+    }
+}
+
 // MARK: - HoveredTrackManager
 
 /// Tracks the currently hovered track row so a keyboard shortcut can act on it.
@@ -11,6 +31,7 @@ import Observation
 final class HoveredTrackManager {
     /// The song currently under the cursor in a track row, if any.
     private(set) var hoveredSong: Song?
+    private let claim = HoverClaim<Song, String>(keyOf: \.videoId)
 
     /// videoId of a song just added to the queue via the Q hotkey. Briefly
     /// non-nil so the originating row can animate a confirmation badge.
@@ -27,7 +48,7 @@ final class HoveredTrackManager {
     /// Prevents a race where row A's hoverExit fires after row B's hoverEnter,
     /// which would incorrectly clear row B's song.
     func clearIfMatched(_ song: Song) {
-        if self.hoveredSong?.videoId == song.videoId {
+        if self.claim.matches(self.hoveredSong, song.videoId) {
             self.hoveredSong = nil
         }
     }
@@ -58,6 +79,7 @@ final class QueueRowHoverTracker {
 
     /// Index of the queue row currently under the cursor, if any.
     private(set) var hoveredIndex: Int?
+    private let claim = HoverClaim<Int, Int>(keyOf: { $0 })
 
     /// Set by the active `QueueListControllerRepresentable.Coordinator`.
     /// Removes the row at the given index with a slide-out animation.
@@ -71,7 +93,7 @@ final class QueueRowHoverTracker {
     /// Clears the hovered row only if it matches, preventing the same
     /// enter-after-exit race `HoveredTrackManager.clearIfMatched` guards against.
     func clearIfMatched(_ index: Int) {
-        if self.hoveredIndex == index {
+        if self.claim.matches(self.hoveredIndex, index) {
             self.hoveredIndex = nil
         }
     }

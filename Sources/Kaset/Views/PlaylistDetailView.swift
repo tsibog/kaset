@@ -729,7 +729,6 @@ private struct PlaylistTrackRow<Menu: View>: View {
 
     @State private var isHovered: Bool = false
     @Environment(PlayerService.self) private var playerService
-    @Environment(HoveredTrackManager.self) private var hoveredTrackManager
 
     var body: some View {
         let isCurrent = self.playerService.currentTrack?.videoId == self.track.videoId
@@ -791,13 +790,9 @@ private struct PlaylistTrackRow<Menu: View>: View {
         .buttonStyle(.interactiveRow(cornerRadius: 6))
         .disabled(!self.track.isPlayable)
         .queuedFeedback(for: self.track)
+        .hoverQueueable(for: self.track)
         .onHover { hovering in
             self.isHovered = hovering
-            if hovering {
-                self.hoveredTrackManager.setHovered(self.track)
-            } else {
-                self.hoveredTrackManager.clearIfMatched(self.track)
-            }
         }
         .contextMenu { self.menu() }
     }
