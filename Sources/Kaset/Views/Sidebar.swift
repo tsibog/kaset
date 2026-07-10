@@ -13,6 +13,10 @@ struct Sidebar: View {
     @Environment(AuthService.self) private var authService
     @Environment(SidebarPinnedItemsManager.self) private var sidebarPinnedItemsManager
     @Environment(PodcastsAvailabilityService.self) private var podcastsAvailability
+    @Environment(HoveredTrackManager.self) private var hoveredTrackManager
+
+    @State private var dropTargetPlaylistId: String?
+    @State private var dropFeedbackPlaylistId: String?
 
     var body: some View {
         List {
@@ -122,16 +126,55 @@ struct Sidebar: View {
         HapticService.navigation()
     }
 
+    /// Briefly shows a green checkmark badge on the playlist row to confirm
+    /// a successful drag-and-drop. Mirrors the `flashQueued` pattern from
+    /// `HoveredTrackManager` used by the Q-to-queue hotkey.
+    private func flashDropFeedback(for playlistId: String) {
+        self.dropFeedbackPlaylistId = playlistId
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            if self.dropFeedbackPlaylistId == playlistId {
+                self.dropFeedbackPlaylistId = nil
+            }
+        }
+    }
+
     private func sidebarPinnedRow(_ item: SidebarPinnedItem) -> some View {
-        KasetSidebarRow(
+        let isPlaylist = {
+            if case .playlist = item.itemType { true } else { false }
+        }()
+        let isDropTargeted = self.dropTargetPlaylistId == item.contentId
+        let showDropFeedback = self.dropFeedbackPlaylistId == item.contentId
+
+        return KasetSidebarRow(
             title: item.title,
             systemImage: item.systemImage,
-            isSelected: self.currentSidebarSelection == .pinned(item)
+            isSelected: self.currentSidebarSelection == .pinned(item),
+            isDropTargeted: isPlaylist && isDropTargeted
         ) {
             self.selectPinnedItem(item)
         }
-        .dropDestination(for: Song.self) { droppedSongs, _ in
-            guard case .playlist = item.itemType else { return false }
+        .overlay(alignment: .topTrailing) {
+            if isPlaylist && showDropFeedback {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .compatGlass(tint: .green, in: Circle())
+                    .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
+                    .padding(6)
+                    .transition(.scale(scale: 0.4, anchor: .topTrailing).combined(with: .opacity))
+                    .accessibilityHidden(true)
+            }
+        }
+        .animation(AppAnimation.bouncy, value: showDropFeedback)
+        .dropDestination(for: Song.self, isTargeted: Binding(
+            get: { self.dropTargetPlaylistId == item.contentId && isPlaylist },
+            set: { targeted in
+                self.dropTargetPlaylistId = targeted ? item.contentId : (self.dropTargetPlaylistId == item.contentId ? nil : self.dropTargetPlaylistId)
+            }
+        )) { droppedSongs, _ in
+            guard isPlaylist else { return false }
             for song in droppedSongs {
                 Task {
                     do {
@@ -143,6 +186,7 @@ struct Sidebar: View {
                         SongActionsHelper.invalidateLibraryResponseCaches()
                         HapticService.success()
                         DiagnosticsLogger.api.info("Drag-drop: added '\(song.title)' to playlist '\(item.title)'")
+                        self.flashDropFeedback(for: item.contentId)
                     } catch {
                         DiagnosticsLogger.api.error("Drag-drop: failed to add '\(song.title)' to playlist '\(item.title)': \(error.localizedDescription)")
                         HapticService.error()
@@ -202,4 +246,5 @@ struct Sidebar: View {
         .environment(authService)
         .environment(SidebarPinnedItemsManager(skipLoad: true))
         .environment(PodcastsAvailabilityService())
+        .environment(HoveredTrackManager())
 }
