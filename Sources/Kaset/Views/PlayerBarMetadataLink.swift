@@ -7,12 +7,15 @@ struct PlayerBarMetadataButton: View {
     let isEnabled: Bool
     var isLoading = false
     var accessibilityIdentifier: String?
+    /// Horizontal alignment within the available width. Leading for the classic bar; centred is
+    /// opt-in for the centred-title chrome.
+    var alignment: HorizontalAlignment = .leading
     let action: () -> Void
 
     var body: some View {
         if self.isEnabled {
             PlayerBarMetadataLinkLabel(text: self.text, isLoading: self.isLoading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: Alignment(horizontal: self.alignment, vertical: .center))
                 .contentShape(.rect)
                 .onTapGesture(perform: self.action)
                 .accessibilityAddTraits(.isButton)

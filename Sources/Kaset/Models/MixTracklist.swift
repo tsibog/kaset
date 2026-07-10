@@ -120,6 +120,10 @@ struct MixTracklist: Hashable {
     /// A single track with 2 chapters is not a mix; 3+ entries indicates a real tracklist.
     static let minEntryCount = 3
 
+    /// Minimum item duration (seconds) worth looking up a tracklist for. Short tracks are never
+    /// mixes, so the fetch is skipped below this threshold.
+    static let minMixDuration: TimeInterval = 600
+
     /// Whether this tracklist has enough entries to be treated as a mix.
     var isMix: Bool {
         self.entries.count >= Self.minEntryCount
