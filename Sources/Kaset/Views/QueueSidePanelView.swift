@@ -201,6 +201,13 @@ struct QueueListControllerRepresentable: NSViewControllerRepresentable {
                 tableView.dataSource = self.coordinator
                 tableView.coordinator = self.coordinator
             }
+            QueueRowHoverTracker.shared.removeHandler = { [weak coordinator] row in
+                coordinator?.removeHoveredRowIfPossible(row)
+            }
+        }
+
+        isolated deinit {
+            QueueRowHoverTracker.shared.reset()
         }
     }
 
@@ -241,6 +248,14 @@ struct QueueListControllerRepresentable: NSViewControllerRepresentable {
             self.onRemove = onRemove
             self.onStartRadio = onStartRadio
             super.init()
+        }
+
+        /// Removes the queue row currently hovered by the Q hotkey, if removable.
+        /// Mirrors the "Remove from Queue" context-menu guard: the currently
+        /// playing track can't be removed this way.
+        func removeHoveredRowIfPossible(_ row: Int) {
+            guard row != self.currentIndex, self.entries[safe: row] != nil else { return }
+            self.removeRowWithAnimation(row: row, slideDirection: 1)
         }
 
         /// Removes the row with slide-out animation, then calls onRemove.

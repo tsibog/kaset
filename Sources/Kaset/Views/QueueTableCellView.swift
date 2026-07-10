@@ -41,6 +41,11 @@ class QueueTableCellView: NSView {
     private let explicitBadge = NSTextField()
     private let likeButton = NSButton()
     private var onToggleLikeAction: (() -> Void)?
+    /// Row index within the queue table, used to report hover to `QueueRowHoverTracker`
+    /// so the Q hotkey can remove this row. NSTableView reuses cell views across rows,
+    /// so `configure(index:)` clears any stale claim before adopting the new index.
+    private var rowIndex: Int = -1
+    private var hoverTrackingArea: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -223,8 +228,37 @@ class QueueTableCellView: NSView {
         }
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea {
+            self.removeTrackingArea(hoverTrackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: self.bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        self.addTrackingArea(area)
+        self.hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        QueueRowHoverTracker.shared.setHovered(self.rowIndex)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        QueueRowHoverTracker.shared.clearIfMatched(self.rowIndex)
+    }
+
     // swiftlint:disable:next function_parameter_count
     func configure(song: Song, index: Int, isCurrentTrack: Bool, isPlaying: Bool, isSuggested: Bool, actions: QueueCellActions) {
+        if self.rowIndex != index {
+            QueueRowHoverTracker.shared.clearIfMatched(self.rowIndex)
+            self.rowIndex = index
+        }
         self.onPlay = actions.onPlay
         self.onRemove = actions.onRemove
         self.onToggleLikeAction = actions.onToggleLike
@@ -342,6 +376,7 @@ class QueueTableCellView: NSView {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        QueueRowHoverTracker.shared.clearIfMatched(self.rowIndex)
         self.imageLoadTask?.cancel()
         self.imageLoadTask = nil
         self.currentSongId = nil

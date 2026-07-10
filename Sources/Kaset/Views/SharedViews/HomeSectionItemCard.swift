@@ -18,6 +18,7 @@ struct HomeSectionItemCard: View {
     /// Hover state for play overlay.
     @State private var isHovering = false
     @State private var failedThumbnailURLs: Set<URL> = []
+    @Environment(HoveredTrackManager.self) private var hoveredTrackManager
 
     init(
         item: HomeSectionItem,
@@ -61,9 +62,17 @@ struct HomeSectionItemCard: View {
             y: self.isHovering ? 4 : 0
         )
         .animation(AppAnimation.spring, value: self.isHovering)
+        .queuedFeedback(for: self.item.song)
         .onHover { hovering in
             withAnimation(AppAnimation.quick) {
                 self.isHovering = hovering
+            }
+            if let song = self.item.song {
+                if hovering {
+                    self.hoveredTrackManager.setHovered(song)
+                } else {
+                    self.hoveredTrackManager.clearIfMatched(song)
+                }
             }
         }
         .onChange(of: self.item.id) { _, _ in

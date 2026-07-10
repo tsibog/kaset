@@ -63,12 +63,27 @@ struct LikeButton: View {
 
 /// Wraps a row's body and provides per-row hover state via closure.
 /// Use to drive `LikeButton.isRowHovered` and any other hover-only chrome.
+/// When `song` is provided, also updates the shared `HoveredTrackManager`
+/// so keyboard shortcuts (e.g., Q to queue) can act on the hovered track.
 struct HoverObservingRow<Content: View>: View {
+    /// Optional song to register with HoveredTrackManager on hover.
+    var song: Song?
     @ViewBuilder let content: (Bool) -> Content
     @State private var isHovered: Bool = false
+    @Environment(HoveredTrackManager.self) private var hoveredTrackManager
 
     var body: some View {
         self.content(self.isHovered)
-            .onHover { hovering in self.isHovered = hovering }
+            .queuedFeedback(for: self.song)
+            .onHover { hovering in
+                self.isHovered = hovering
+                if let song {
+                    if hovering {
+                        self.hoveredTrackManager.setHovered(song)
+                    } else {
+                        self.hoveredTrackManager.clearIfMatched(song)
+                    }
+                }
+            }
     }
 }

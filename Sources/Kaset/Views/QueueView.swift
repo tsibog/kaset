@@ -114,7 +114,9 @@ struct QueueView: View {
                         favoritesManager: self.favoritesManager,
                         playerService: self.playerService,
                         onRemove: {
-                            self.playerService.removeFromQueue(at: index)
+                            withAnimation(AppAnimation.smooth) {
+                                self.playerService.removeFromQueue(at: index)
+                            }
                         },
                         onTap: {
                             Task {
@@ -122,12 +124,31 @@ struct QueueView: View {
                             }
                         }
                     )
+                    .transition(.asymmetric(
+                        insertion: .opacity,
+                        removal: .opacity.combined(with: .scale(scale: 0.95))
+                    ))
                     .accessibilityIdentifier(AccessibilityID.Queue.row(index: index))
                 }
             }
             .padding(.vertical, 8)
         }
         .accessibilityIdentifier(AccessibilityID.Queue.scrollView)
+        .onAppear {
+            // This popover and QueueSidePanelView are mutually exclusive display
+            // modes for the same queue, so either can own the Q-to-remove handler.
+            QueueRowHoverTracker.shared.removeHandler = { [weak playerService] row in
+                guard let playerService, row != playerService.currentIndex,
+                      playerService.queueEntries[safe: row] != nil
+                else { return }
+                withAnimation(AppAnimation.smooth) {
+                    playerService.removeFromQueue(at: row)
+                }
+            }
+        }
+        .onDisappear {
+            QueueRowHoverTracker.shared.reset()
+        }
     }
 }
 
@@ -194,6 +215,11 @@ private struct QueueRowView: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             self.isHovering = hovering
+            if hovering {
+                QueueRowHoverTracker.shared.setHovered(self.index)
+            } else {
+                QueueRowHoverTracker.shared.clearIfMatched(self.index)
+            }
         }
         .contextMenu {
             FavoritesContextMenu.menuItem(for: self.song, manager: self.favoritesManager)
