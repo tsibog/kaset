@@ -184,7 +184,7 @@ struct KasetApp: App {
                 .environment(self.equalizerService)
                 .environment(self.podcastsAvailabilityService)
                 .environment(self.hoveredTrackManager)
-                .environment(\\.searchFocusTrigger, self.$searchFocusTrigger)
+                .environment(\.searchFocusTrigger, self.$searchFocusTrigger)
                 .environment(\.navigationSelection, self.$navigationSelection)
                 .environment(\.showCommandBar, self.$showCommandBar)
                 .environment(\.showWhatsNew, self.$showWhatsNew)
