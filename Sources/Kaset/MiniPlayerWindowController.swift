@@ -180,7 +180,7 @@ final class MiniPlayerWindowController {
         case .expanded:
             NSRect(x: 0, y: 0, width: 320, height: 320)
         case .lyrics:
-            NSRect(x: 0, y: 0, width: 320, height: 500)
+            NSRect(x: 0, y: 0, width: 400, height: 560)
         }
     }
 

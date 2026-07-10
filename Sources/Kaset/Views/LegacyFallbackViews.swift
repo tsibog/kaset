@@ -228,7 +228,7 @@ struct SimpleLyricsView: View {
 
     let client: any YTMusicClientProtocol
     var showsHeader = true
-    var preferredWidth: CGFloat? = 280
+    var preferredWidth: CGFloat? = 360
 
     @State private var lastLoadedVideoId: String?
     @State private var isLoadingFallback = false
