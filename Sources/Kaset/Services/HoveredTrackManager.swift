@@ -12,6 +12,11 @@ final class HoveredTrackManager {
     /// The song currently under the cursor in a track row, if any.
     private(set) var hoveredSong: Song?
 
+    /// videoId of a song just added to the queue via the Q hotkey. Briefly
+    /// non-nil so the originating row can animate a confirmation badge.
+    private(set) var recentlyQueuedSongID: String?
+    private var flashResetTask: Task<Void, Never>?
+
     /// Sets the hovered song. Called from `.onHover` on track rows.
     /// Pass nil when the cursor leaves a row.
     func setHovered(_ song: Song?) {
@@ -26,12 +31,64 @@ final class HoveredTrackManager {
             self.hoveredSong = nil
         }
     }
+
+    /// Marks `song` as just-queued for a brief window, driving a confirmation
+    /// badge on its row via `HoverObservingRow`/`HomeSectionItemCard`.
+    func flashQueued(_ song: Song) {
+        self.flashResetTask?.cancel()
+        self.recentlyQueuedSongID = song.videoId
+        self.flashResetTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled else { return }
+            self?.recentlyQueuedSongID = nil
+        }
+    }
+}
+
+// MARK: - QueueRowHoverTracker
+
+/// Tracks which row of the Queue side panel (an `NSTableView`, so it can't use
+/// SwiftUI `.onHover`) is under the cursor, and exposes the action to remove it.
+/// Lets the Q hotkey remove the hovered queue entry instead of adding a new one.
+@MainActor
+final class QueueRowHoverTracker {
+    static let shared = QueueRowHoverTracker()
+
+    private init() {}
+
+    /// Index of the queue row currently under the cursor, if any.
+    private(set) var hoveredIndex: Int?
+
+    /// Set by the active `QueueListControllerRepresentable.Coordinator`.
+    /// Removes the row at the given index with a slide-out animation.
+    var removeHandler: ((Int) -> Void)?
+
+    /// Sets the hovered row. Called from `QueueTableCellView`'s tracking area.
+    func setHovered(_ index: Int) {
+        self.hoveredIndex = index
+    }
+
+    /// Clears the hovered row only if it matches, preventing the same
+    /// enter-after-exit race `HoveredTrackManager.clearIfMatched` guards against.
+    func clearIfMatched(_ index: Int) {
+        if self.hoveredIndex == index {
+            self.hoveredIndex = nil
+        }
+    }
+
+    /// Resets all state. Called when the Queue panel closes so a stale hover
+    /// (e.g. panel dismissed without a mouseExited event) can't linger.
+    func reset() {
+        self.hoveredIndex = nil
+        self.removeHandler = nil
+    }
 }
 
 // MARK: - HotkeyMonitor
 
 /// Monitors for key presses when the app window is focused.
-/// Currently handles: Q = add hovered track to queue.
+/// Currently handles: Q = add hovered track to queue, or remove it from the
+/// queue if the hovered row is inside the Queue side panel.
 @MainActor
 final class HotkeyMonitor {
     static let shared = HotkeyMonitor()
@@ -53,16 +110,26 @@ final class HotkeyMonitor {
 
             // Don't intercept if a text field or other text input has focus
             // (e.g., user is typing in the search bar)
-            if NSApp.keyWindow?.firstResponder is NSText { return event }
+            if NSApp.keyWindow?.firstResponder is NSText {
+                return event
+            }
 
             // Q key with no modifiers (not ⌘Q, ⌃Q, ⌥Q, etc.)
             // Subtract .capsLock from the mask check so the hotkey works with caps lock on.
             if event.charactersIgnoringModifiers?.lowercased() == "q",
                event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock).isEmpty
             {
+                // Hovering a row inside the Queue panel takes priority: Q removes it.
+                if let queueRow = QueueRowHoverTracker.shared.hoveredIndex {
+                    QueueRowHoverTracker.shared.removeHandler?(queueRow)
+                    HapticService.success()
+                    return nil
+                }
+
                 if let song = hoveredTrackManager.hoveredSong {
                     SongActionsHelper.addToQueueLast(song, playerService: playerService)
-                    HapticService.toggle()
+                    hoveredTrackManager.flashQueued(song)
+                    HapticService.success()
                     return nil // Consume the event
                 }
             }

@@ -115,7 +115,11 @@ enum SearchResultItem: Identifiable {
 
     /// The Song if this result is a song, nil otherwise.
     var song: Song? {
-        if case let .song(song) = self { song } else { nil }
+        if case let .song(song) = self {
+            song
+        } else {
+            nil
+        }
     }
 
     var subtitle: String? {

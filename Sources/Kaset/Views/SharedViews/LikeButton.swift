@@ -67,13 +67,14 @@ struct LikeButton: View {
 /// so keyboard shortcuts (e.g., Q to queue) can act on the hovered track.
 struct HoverObservingRow<Content: View>: View {
     /// Optional song to register with HoveredTrackManager on hover.
-    var song: Song? = nil
+    var song: Song?
     @ViewBuilder let content: (Bool) -> Content
     @State private var isHovered: Bool = false
     @Environment(HoveredTrackManager.self) private var hoveredTrackManager
 
     var body: some View {
         self.content(self.isHovered)
+            .queuedFeedback(for: self.song)
             .onHover { hovering in
                 self.isHovered = hovering
                 if let song {

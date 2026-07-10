@@ -62,6 +62,7 @@ struct HomeSectionItemCard: View {
             y: self.isHovering ? 4 : 0
         )
         .animation(AppAnimation.spring, value: self.isHovering)
+        .queuedFeedback(for: self.item.song)
         .onHover { hovering in
             withAnimation(AppAnimation.quick) {
                 self.isHovering = hovering
