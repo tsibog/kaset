@@ -104,6 +104,27 @@ struct MixTracklistTests {
         #expect(tracklist?.entries.last?.duration == 90)
     }
 
+    // MARK: - Effective Duration
+
+    @Test("Effective duration falls back to videoDuration - startTime when endTime is unknown")
+    func effectiveDurationFallsBackToVideoDuration() {
+        let finalEntry = MixTrackEntry(startTime: 600, endTime: nil, title: "Final", artist: "A", source: .chapters)
+        #expect(finalEntry.duration(videoDuration: 900) == 300)
+    }
+
+    @Test("Effective duration prefers the entry's own duration when endTime is known")
+    func effectiveDurationPrefersKnownDuration() {
+        let entry = MixTrackEntry(startTime: 600, endTime: 750, title: "Mid", artist: "A", source: .chapters)
+        #expect(entry.duration(videoDuration: 900) == 150)
+    }
+
+    @Test("Effective duration is nil when the video duration doesn't exceed the entry's start")
+    func effectiveDurationNilWhenVideoDurationUnknownOrTooSmall() {
+        let finalEntry = MixTrackEntry(startTime: 600, endTime: nil, title: "Final", artist: "A", source: .chapters)
+        #expect(finalEntry.duration(videoDuration: 0) == nil)
+        #expect(finalEntry.duration(videoDuration: 600) == nil)
+    }
+
     // MARK: - isMix Threshold
 
     @Test("Three or more entries is a mix; fewer is not")

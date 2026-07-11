@@ -444,8 +444,11 @@ final class ScrobblingCoordinator {
 
     /// Checks whether the current sub-track has met the scrobble threshold.
     private func checkMixEntryScrobbleThreshold(entry: MixTrackEntry, song: Song?) {
+        let videoDuration = song?.duration ?? self.playerService.duration
+        let entryDuration = entry.duration(videoDuration: videoDuration)
+
         guard var tracker = self.mixEntryTracker,
-              tracker.meetsThreshold(duration: entry.duration, thresholds: self.mixEntryThresholds)
+              tracker.meetsThreshold(duration: entryDuration, thresholds: self.mixEntryThresholds)
         else { return }
 
         tracker.markScrobbled()
@@ -455,7 +458,7 @@ final class ScrobblingCoordinator {
             title: entry.title,
             artist: entry.artist ?? song?.artistsDisplay ?? "Unknown Artist",
             album: nil,
-            duration: entry.duration,
+            duration: entryDuration,
             timestamp: tracker.startTime,
             videoId: song?.videoId
         )
@@ -474,7 +477,7 @@ final class ScrobblingCoordinator {
             title: entry.title,
             artist: entry.artist ?? song.artistsDisplay,
             album: nil,
-            duration: entry.duration,
+            duration: entry.duration(videoDuration: song.duration ?? self.playerService.duration),
             timestamp: tracker.startTime,
             videoId: song.videoId
         )

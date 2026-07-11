@@ -30,6 +30,19 @@ struct MixTrackEntry: Identifiable, Hashable {
         return endTime - self.startTime
     }
 
+    /// Effective duration once the video's total duration is known. Falls back to
+    /// `videoDuration - startTime` when `endTime` is unknown — YouTube doesn't always expose an
+    /// end bound for the final chapter, but the video itself has a known length. Mirrors the
+    /// segmented seek bar's `entry.endTime ?? duration` fallback (see `PlayerBar.progressSegments`),
+    /// so scrobble thresholds and the visible segment agree on where the final sub-track ends.
+    func duration(videoDuration: TimeInterval) -> TimeInterval? {
+        if let duration {
+            return duration
+        }
+        guard videoDuration > self.startTime else { return nil }
+        return videoDuration - self.startTime
+    }
+
     init(
         id: UUID = UUID(),
         startTime: TimeInterval,

@@ -690,4 +690,64 @@ struct ScrobblingCoordinatorTests {
         let timestamps = queue.pendingTracks.map(\.timestamp)
         #expect(timestamps.last != firstTimestamp, "replay scrobble must carry a fresh timestamp")
     }
+
+    /// Regression: the final chapter of a mix has no explicit end time, so its entry duration is
+    /// nil. Without a video-duration fallback, the threshold check falls back to the unknown-duration
+    /// path and requires the full `scrobbleMinSeconds` (240s default) — a normal 2-minute closing
+    /// track would never scrobble. With the fallback, the entry's effective duration is derived from
+    /// the known video duration, so the normal percent-of-duration threshold applies instead.
+    @Test("Final mix entry with unknown end time scrobbles via percent threshold, not minSeconds")
+    func finalMixEntryScrobblesUsingVideoDurationFallback() async throws {
+        let dir = try self.makeTemporaryDirectory()
+        defer { self.cleanupDirectory(dir) }
+
+        let chapters = [
+            YouTubeChapter(videoId: "mix1", title: "Artist 0 - Track 0", startTime: 0, endTime: 300, timeText: nil, thumbnailURL: nil),
+            YouTubeChapter(videoId: "mix1", title: "Artist 1 - Track 1", startTime: 300, endTime: 600, timeText: nil, thumbnailURL: nil),
+            YouTubeChapter(videoId: "mix1", title: "Artist 2 - Track 2", startTime: 600, endTime: nil, timeText: nil, thumbnailURL: nil),
+        ]
+        let mockYouTube = MockYouTubeClient()
+        mockYouTube.watchNextData = self.makeWatchNextData(chapters: chapters)
+        let parser = MixTracklistParser(youTubeClient: mockYouTube)
+
+        let mockService = MockScrobbleService()
+        mockService.authState = .connected(username: "testuser")
+        let settings = SettingsManager.shared
+        settings.setServiceEnabled("Mock", true)
+        defer { settings.setServiceEnabled("Mock", false) }
+
+        // Video is 720s total; the final chapter starts at 600s with no endTime, so its effective
+        // duration should be 720 - 600 = 120s. At the default 50% threshold that's 60s of playback —
+        // far short of the 240s `scrobbleMinSeconds` the unknown-duration path would otherwise require.
+        let playerService = PlayerService()
+        playerService.currentTrack = TestFixtures.makeSong(id: "mix1", title: "Long Mix", duration: 720)
+        playerService.state = .playing
+        playerService.duration = 720
+
+        let provider = NowPlayingTracklistProvider(parser: parser)
+        playerService.setNowPlayingTracklistProvider(provider)
+
+        let queue = ScrobbleQueue(directory: dir)
+        let coordinator = ScrobblingCoordinator(
+            playerService: playerService,
+            settingsManager: settings,
+            services: [mockService],
+            queue: queue,
+            nowPlayingTracklistProvider: provider
+        )
+        coordinator.startMonitoring()
+        defer { coordinator.stopMonitoring() }
+
+        // Jump straight into the final chapter and play forward. 70 progress-seconds is comfortably
+        // past the 60s percent threshold but nowhere near the 240s minSeconds fallback.
+        var tick: TimeInterval = 600
+        await self.waitUntil(timeout: .seconds(5)) {
+            playerService.progress = tick
+            tick += 1
+            return queue.count == 1 || tick > 671
+        }
+
+        #expect(queue.count == 1, "final sub-track should scrobble via the percent threshold using the video-duration fallback")
+        #expect(queue.pendingTracks.first?.duration == 120, "scrobbled duration should be videoDuration - startTime")
+    }
 }
