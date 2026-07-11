@@ -683,4 +683,138 @@ struct ScrobblingCoordinatorTests {
         #expect(mockYouTube.requestedWatchNextVideoIds == ["mix1", "mix2"])
         await firstRequestGate.open()
     }
+
+    /// Regression: a slow tracklist fetch must not let a real mix scrobble once as the whole
+    /// video and again per sub-track — the whole-track threshold is deferred until the parse
+    /// resolves, and resumes only when it resolves with no tracklist.
+    @Test("Whole-track scrobble is deferred while a mix parse is in flight")
+    func wholeTrackScrobbleDeferredDuringMixParse() async throws {
+        let dir = try self.makeTemporaryDirectory()
+        defer { self.cleanupDirectory(dir) }
+
+        let parseGate = AsyncGate()
+        let mockYouTube = MockYouTubeClient()
+        // No chapters — the parse eventually resolves to "not a mix".
+        mockYouTube.watchNextData = self.makeWatchNextData(chapters: [])
+        mockYouTube.beforeWatchNextReturn = { _ in await parseGate.wait() }
+        let parser = MixTracklistParser(youTubeClient: mockYouTube)
+
+        let mockService = MockScrobbleService()
+        mockService.authState = .connected(username: "testuser")
+        let settings = SettingsManager.shared
+        settings.setServiceEnabled("Mock", true)
+        let savedMinSeconds = settings.scrobbleMinSeconds
+        settings.scrobbleMinSeconds = 2
+        defer {
+            settings.setServiceEnabled("Mock", false)
+            settings.scrobbleMinSeconds = savedMinSeconds
+        }
+
+        let playerService = PlayerService()
+        playerService.currentTrack = TestFixtures.makeSong(id: "long1", title: "Long Video", duration: 3600)
+        playerService.state = .playing
+        playerService.duration = 3600
+
+        let queue = ScrobbleQueue(directory: dir)
+        let coordinator = ScrobblingCoordinator(
+            playerService: playerService,
+            settingsManager: settings,
+            services: [mockService],
+            queue: queue,
+            mixTracklistParser: parser
+        )
+        coordinator.startMonitoring()
+        defer { coordinator.stopMonitoring() }
+
+        await self.waitUntil { mockYouTube.getWatchNextCallCount == 1 }
+
+        // Accumulate well past the (lowered) min-seconds threshold while the parse is suspended.
+        for tick in 1 ... 4 {
+            playerService.progress = TimeInterval(tick)
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(queue.isEmpty, "whole-track scrobble must wait for the mix parse to resolve")
+
+        // Parse resolves with no tracklist — whole-track scrobbling may now proceed.
+        await parseGate.open()
+        var tick: TimeInterval = 5
+        await self.waitUntil {
+            playerService.progress = tick
+            tick += 1
+            return queue.count == 1
+        }
+        #expect(queue.count == 1)
+    }
+
+    /// Regression: seeking within a sub-track that already scrobbled must not clear its latch —
+    /// a re-scrobble with the same timestamp is a Last.fm duplicate. A backward jump is an
+    /// intentional replay and restarts the sub-track with a fresh timestamp instead.
+    @Test("Seek within a scrobbled sub-track does not duplicate; replay gets a fresh timestamp")
+    func mixSeekAfterScrobbleDoesNotDuplicate() async throws {
+        let dir = try self.makeTemporaryDirectory()
+        defer { self.cleanupDirectory(dir) }
+
+        let mockYouTube = MockYouTubeClient()
+        mockYouTube.watchNextData = self.makeWatchNextData(chapters: self.makeMixChapters())
+        let parser = MixTracklistParser(youTubeClient: mockYouTube)
+
+        let mockService = MockScrobbleService()
+        mockService.authState = .connected(username: "testuser")
+        let settings = SettingsManager.shared
+        settings.setServiceEnabled("Mock", true)
+        let savedMinSeconds = settings.scrobbleMinSeconds
+        settings.scrobbleMinSeconds = 2
+        defer {
+            settings.setServiceEnabled("Mock", false)
+            settings.scrobbleMinSeconds = savedMinSeconds
+        }
+
+        let playerService = PlayerService()
+        playerService.currentTrack = TestFixtures.makeSong(id: "mix1", title: "Long Mix", duration: 1800)
+        playerService.state = .playing
+        playerService.duration = 1800
+
+        let queue = ScrobbleQueue(directory: dir)
+        let coordinator = ScrobblingCoordinator(
+            playerService: playerService,
+            settingsManager: settings,
+            services: [mockService],
+            queue: queue,
+            mixTracklistParser: parser
+        )
+        coordinator.startMonitoring()
+        defer { coordinator.stopMonitoring() }
+
+        // Play within the first sub-track (0–600s) until it scrobbles.
+        var tick: TimeInterval = 1
+        await self.waitUntil {
+            playerService.progress = tick
+            tick += 1
+            return queue.count == 1
+        }
+        #expect(queue.count == 1)
+        let firstTimestamp = queue.pendingTracks.first?.timestamp
+
+        // Forward seek within the same sub-track, then keep playing — no duplicate scrobble.
+        playerService.progress = 100
+        try? await Task.sleep(for: .milliseconds(20))
+        for step in 1 ... 5 {
+            playerService.progress = 100 + TimeInterval(step)
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(queue.count == 1, "forward seek after scrobbling must not re-arm the scrobble latch")
+
+        // Backward seek — intentional replay. A second scrobble with a fresh timestamp is allowed.
+        playerService.progress = 10
+        try? await Task.sleep(for: .milliseconds(20))
+        var replayTick: TimeInterval = 11
+        await self.waitUntil {
+            playerService.progress = replayTick
+            replayTick += 1
+            return queue.count == 2
+        }
+        #expect(queue.count == 2)
+        let timestamps = queue.pendingTracks.map(\.timestamp)
+        #expect(timestamps.last != firstTimestamp, "replay scrobble must carry a fresh timestamp")
+    }
 }

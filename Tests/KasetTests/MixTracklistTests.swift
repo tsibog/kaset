@@ -34,6 +34,36 @@ struct MixTracklistTests {
         #expect(parsed.title == "Defenestration")
     }
 
+    @Test("En dash and em dash separators split artist from title", arguments: [
+        "Boards of Canada – Roygbiv",
+        "Boards of Canada — Roygbiv",
+        "Boards of Canada–Roygbiv",
+        "Boards of Canada—Roygbiv",
+    ])
+    func parsesDashVariants(label: String) {
+        let parsed = MixTrackEntry.parseArtistTitle(from: label)
+        #expect(parsed.artist == "Boards of Canada")
+        #expect(parsed.title == "Roygbiv")
+    }
+
+    @Test("Unspaced ASCII hyphen is not a separator (hyphenated names stay intact)")
+    func unspacedHyphenNotASeparator() {
+        let parsed = MixTrackEntry.parseArtistTitle(from: "Anne-Marie 2002")
+        #expect(parsed.artist == nil)
+        #expect(parsed.title == "Anne-Marie 2002")
+    }
+
+    @Test("The leftmost separator wins when styles are mixed")
+    func leftmostSeparatorWins() {
+        let spacedFirst = MixTrackEntry.parseArtistTitle(from: "Kiasmos - Held—Reworked")
+        #expect(spacedFirst.artist == "Kiasmos")
+        #expect(spacedFirst.title == "Held—Reworked")
+
+        let dashFirst = MixTrackEntry.parseArtistTitle(from: "DJ Rashad – Itwerk - Percussion Mix")
+        #expect(dashFirst.artist == "DJ Rashad")
+        #expect(dashFirst.title == "Itwerk - Percussion Mix")
+    }
+
     @Test("Empty artist side falls back to nil")
     func emptyArtistFallsBackToNil() {
         let parsed = MixTrackEntry.parseArtistTitle(from: " - Just A Title")
@@ -93,6 +123,34 @@ struct MixTracklistTests {
         #expect(tracklist(entryCount: MixTracklist.minEntryCount + 5).isMix == true)
     }
 
+    @Test("Navigation chapters without parseable artists are not a mix")
+    func navigationChaptersAreNotAMix() {
+        let entries = ["Intro", "Verse", "Chorus", "Outro"].enumerated().map { index, title in
+            MixTrackEntry(
+                startTime: TimeInterval(index) * 300, endTime: nil,
+                title: title, artist: nil, source: .chapters
+            )
+        }
+        let list = MixTracklist(videoId: "v", entries: entries, source: .chapters)
+        #expect(list.isMix == false)
+    }
+
+    @Test("A majority of parsed artists qualifies as a mix; a minority does not")
+    func parsedArtistRatioThreshold() {
+        func tracklist(artistCount: Int, total: Int) -> MixTracklist {
+            let entries = (0 ..< total).map {
+                MixTrackEntry(
+                    startTime: TimeInterval($0) * 300, endTime: nil,
+                    title: "T\($0)", artist: $0 < artistCount ? "A\($0)" : nil, source: .chapters
+                )
+            }
+            return MixTracklist(videoId: "v", entries: entries, source: .chapters)
+        }
+
+        #expect(tracklist(artistCount: 2, total: 4).isMix == true)
+        #expect(tracklist(artistCount: 1, total: 4).isMix == false)
+    }
+
     // MARK: - entry(at:) Lookup
 
     @Test("entry(at:) returns the active sub-track and nil before the first entry")
@@ -108,5 +166,18 @@ struct MixTracklistTests {
         #expect(list.entry(at: 599)?.title == "A")
         #expect(list.entry(at: 600)?.title == "B")
         #expect(list.entry(at: 5000)?.title == "C")
+    }
+
+    @Test("entry(at:) returns nil past the final entry's explicit end time")
+    func entryLookupRespectsFinalEndTime() {
+        let entries = [
+            MixTrackEntry(startTime: 0, endTime: 600, title: "A", artist: "1", source: .chapters),
+            MixTrackEntry(startTime: 600, endTime: 1200, title: "B", artist: "2", source: .chapters),
+        ]
+        let list = MixTracklist(videoId: "v", entries: entries, source: .chapters)
+
+        #expect(list.entry(at: 1199)?.title == "B")
+        #expect(list.entry(at: 1200) == nil)
+        #expect(list.entry(at: 5000) == nil)
     }
 }

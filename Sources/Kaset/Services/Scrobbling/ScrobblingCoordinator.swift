@@ -261,8 +261,10 @@ final class ScrobblingCoordinator {
                 self.sendNowPlaying(track)
             }
 
-            // Check scrobble threshold
-            if self.trackTracker?.hasScrobbled == false, duration > 0 {
+            // Check scrobble threshold. Deferred while a mix parse is in flight so a slow
+            // tracklist fetch can't let the whole mix scrobble once as one track and again
+            // per sub-track after the tracklist arrives.
+            if self.trackTracker?.hasScrobbled == false, duration > 0, self.mixParseTask == nil {
                 self.checkScrobbleThreshold(track: track, duration: duration)
             }
         } else if self.currentTrackVideoId != nil {
@@ -436,10 +438,19 @@ final class ScrobblingCoordinator {
 
         guard let entry, self.currentMixEntry?.id == entry.id else { return }
 
-        // Seek detection: reset the sub-track clock on a significant jump.
+        // Seek detection: a significant jump resets the sub-track clock. Once the entry has
+        // scrobbled, only a backward jump matters — that's a replay, restarted with a fresh
+        // tracker so a second scrobble carries a new timestamp instead of duplicating the first.
         if let tracker = self.mixEntryTracker, abs(progress - tracker.lastProgress) > 5.0 {
-            self.mixEntryTracker?.resetForSeek()
-            self.logger.debug("Mix seek detected at \(String(format: "%.1f", progress))s, resetting sub-track '\(entry.title)'")
+            if tracker.hasScrobbled {
+                if progress < tracker.lastProgress {
+                    self.startMixEntry(entry, progress: progress)
+                    self.logger.debug("Mix replay detected at \(String(format: "%.1f", progress))s, restarting sub-track '\(entry.title)'")
+                }
+            } else {
+                self.mixEntryTracker?.resetForSeek()
+                self.logger.debug("Mix seek detected at \(String(format: "%.1f", progress))s, resetting sub-track '\(entry.title)'")
+            }
         }
 
         // Accumulate play time (the tracker ignores seeks and paused spans internally)

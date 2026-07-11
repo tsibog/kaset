@@ -59,15 +59,24 @@ struct MixTrackEntry: Identifiable, Hashable {
         self.title = parsed.title
     }
 
+    /// Separator tokens recognized between artist and title. An unspaced ASCII hyphen is NOT
+    /// a separator — it appears inside names like "Anne-Marie" or "T-Pain".
+    private static let artistTitleSeparators = [" - ", " – ", " — ", "–", "—"]
+
     /// Splits a chapter/description label like "Artist - Title" into its parts, trimming whitespace.
-    /// Splits on the FIRST " - "; if absent, the whole string is the title and the artist is nil
-    /// (the caller supplies a fallback). Shared by the chapter and description tracklist tiers.
+    /// The LEFTMOST separator occurrence wins — the artist boundary precedes any dash inside the
+    /// title (e.g. "DJ Rashad – Itwerk - Percussion Mix"). If none is present, the whole string is
+    /// the title and the artist is nil (the caller supplies a fallback). Shared by the chapter and
+    /// description tracklist tiers.
     static func parseArtistTitle(from raw: String) -> (artist: String?, title: String) {
-        guard let dashRange = raw.range(of: " - ") else {
+        let match = self.artistTitleSeparators
+            .compactMap { raw.range(of: $0) }
+            .min { $0.lowerBound < $1.lowerBound }
+        guard let range = match else {
             return (nil, raw.trimmingCharacters(in: .whitespaces))
         }
-        let artist = raw[..<dashRange.lowerBound].trimmingCharacters(in: .whitespaces)
-        let title = raw[dashRange.upperBound...].trimmingCharacters(in: .whitespaces)
+        let artist = raw[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
+        let title = raw[range.upperBound...].trimmingCharacters(in: .whitespaces)
         return (artist.isEmpty ? nil : artist, title)
     }
 }
@@ -93,7 +102,8 @@ struct MixTracklist: Hashable {
 
     /// Find the entry active at a given playback position (seconds from start).
     /// Returns the last entry whose startTime is <= progress, or nil if progress
-    /// is before the first entry.
+    /// is before the first entry or at/past the matched entry's explicit endTime
+    /// (e.g. an outro section after the final chapter's bound).
     func entry(at progress: TimeInterval) -> MixTrackEntry? {
         // Binary search for the last entry with startTime <= progress
         guard !self.entries.isEmpty else { return nil }
@@ -113,15 +123,27 @@ struct MixTracklist: Hashable {
             }
         }
 
-        return self.entries[result]
+        let entry = self.entries[result]
+        if let endTime = entry.endTime, progress >= endTime {
+            return nil
+        }
+        return entry
     }
 
     /// Minimum entry count for a tracklist to be treated as a mix.
     /// A single track with 2 chapters is not a mix; 3+ entries indicates a real tracklist.
     static let minEntryCount = 3
 
-    /// Whether this tracklist has enough entries to be treated as a mix.
+    /// Minimum fraction of entries that must carry a parsed artist for the tracklist to be
+    /// treated as a mix. Navigation chapters ("Intro", "Verse", "Outro") have no artist part,
+    /// so a chapter count alone would misclassify ordinary chaptered videos as mixes.
+    static let minParsedArtistRatio = 0.5
+
+    /// Whether this tracklist has enough entries — and enough parseable artist/title
+    /// entries — to be treated as a mix.
     var isMix: Bool {
-        self.entries.count >= Self.minEntryCount
+        guard self.entries.count >= Self.minEntryCount else { return false }
+        let parsedArtistCount = self.entries.count { $0.artist != nil }
+        return Double(parsedArtistCount) >= Double(self.entries.count) * Self.minParsedArtistRatio
     }
 }
