@@ -83,18 +83,30 @@ enum LibraryMutationActions {
         client: any YTMusicClientProtocol,
         libraryViewModel: LibraryViewModel?
     ) async throws {
+        let pinnedIndex = SidebarPinnedItemsManager.shared.items.firstIndex { $0.contentId == playlist.id }
+        let pinnedItem = pinnedIndex.map { SidebarPinnedItemsManager.shared.items[$0] }
+        SidebarPinnedItemsManager.shared.remove(contentId: playlist.id)
+        LibraryMutationBroadcaster.shared.playlistRemoved(playlistId: playlist.id)
+
         do {
             try await client.deletePlaylist(playlistId: playlist.id)
             self.invalidateResponseCaches()
             libraryViewModel?.markNeedsReloadOnActivation()
-            LibraryMutationBroadcaster.shared.playlistRemoved(playlistId: playlist.id)
+            DiagnosticsLogger.api.info("Deleted playlist: \(playlist.title)")
 
             // Library browse responses can lag briefly behind a successful deletion.
             try? await Task.sleep(for: .milliseconds(500))
             await LibraryMutationBroadcaster.shared.reconcileRemovedPlaylist(playlistId: playlist.id)
             self.invalidateResponseCaches()
-            DiagnosticsLogger.api.info("Deleted playlist: \(playlist.title)")
         } catch {
+            if let pinnedItem, let pinnedIndex {
+                SidebarPinnedItemsManager.shared.insert(pinnedItem, at: pinnedIndex)
+            }
+            // Restore the caller's view directly (like the optimistic podcast mutations do) rather
+            // than broadcasting a creation: other Library instances self-heal on their next reload,
+            // and a global playlistCreated here would fabricate the playlist in views that never
+            // saw the optimistic removal.
+            libraryViewModel?.addToLibrary(playlist: playlist)
             DiagnosticsLogger.api.error("Failed to delete playlist: \(error.localizedDescription)")
             throw error
         }

@@ -77,4 +77,38 @@ struct LibraryMutationActionsTests {
         #expect(self.mockClient.deletePlaylistIds == ["VL-owned"])
         #expect(!self.libraryViewModel.isInLibrary(playlistId: "VL-owned"))
     }
+
+    @Test("Delete playlist unpins it from the sidebar")
+    func deletePlaylistUnpinsFromSidebar() async throws {
+        let playlist = TestFixtures.makePlaylist(id: "VL-pinned-delete", title: "Pinned Playlist")
+        SidebarPinnedItemsManager.shared.add(.from(playlist))
+
+        try await LibraryMutationActions.deletePlaylist(
+            playlist,
+            client: self.mockClient,
+            libraryViewModel: self.libraryViewModel
+        )
+
+        #expect(!SidebarPinnedItemsManager.shared.isPinned(contentId: "VL-pinned-delete"))
+    }
+
+    @Test("Failed playlist deletion restores the sidebar pin and library entry")
+    func deletePlaylistRestoresStateOnFailure() async throws {
+        let playlist = TestFixtures.makePlaylist(id: "VL-delete-fails", title: "Sticky Playlist")
+        self.libraryViewModel.addToLibrary(playlist: playlist)
+        SidebarPinnedItemsManager.shared.add(.from(playlist))
+        self.mockClient.shouldThrowError = URLError(.notConnectedToInternet)
+
+        await #expect(throws: (any Error).self) {
+            try await LibraryMutationActions.deletePlaylist(
+                playlist,
+                client: self.mockClient,
+                libraryViewModel: self.libraryViewModel
+            )
+        }
+
+        #expect(SidebarPinnedItemsManager.shared.isPinned(contentId: "VL-delete-fails"))
+        #expect(self.libraryViewModel.isInLibrary(playlistId: "VL-delete-fails"))
+        SidebarPinnedItemsManager.shared.remove(contentId: "VL-delete-fails")
+    }
 }

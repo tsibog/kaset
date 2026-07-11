@@ -69,6 +69,14 @@ final class SidebarPinnedItemsManager {
         DiagnosticsLogger.ui.info("Added to sidebar: \(item.title)")
     }
 
+    func insert(_ item: SidebarPinnedItem, at index: Int) {
+        guard !self.isPinned(contentId: item.contentId) else { return }
+
+        self.items.insert(item, at: min(index, self.items.endIndex))
+        self.save()
+        DiagnosticsLogger.ui.info("Restored to sidebar: \(item.title)")
+    }
+
     func remove(contentId: String) {
         guard let index = self.items.firstIndex(where: { $0.contentId == contentId }) else {
             DiagnosticsLogger.ui.debug("Item not pinned to sidebar: \(contentId)")

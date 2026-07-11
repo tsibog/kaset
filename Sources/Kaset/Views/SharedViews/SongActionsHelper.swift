@@ -121,11 +121,13 @@ enum SongActionsHelper {
     }
 
     /// Shows a confirmation dialog before permanently deleting a playlist owned by the user.
+    /// Deletion is optimistic: `onConfirm` fires immediately and the playlist is removed from
+    /// the sidebar and library up front, then restored with an error alert if the API call fails.
     static func confirmDeletePlaylist(
         _ playlist: Playlist,
         client: any YTMusicClientProtocol,
         libraryViewModel: LibraryViewModel?,
-        onSuccess: (() -> Void)? = nil
+        onConfirm: (() -> Void)? = nil
     ) {
         let alert = NSAlert()
         alert.messageText = "Delete “\(playlist.title)”?"
@@ -137,6 +139,7 @@ enum SongActionsHelper {
         let handleResponse: (NSApplication.ModalResponse) -> Void = { response in
             guard response == .alertFirstButtonReturn else { return }
 
+            onConfirm?()
             Task { @MainActor in
                 do {
                     try await self.deletePlaylist(
@@ -144,7 +147,6 @@ enum SongActionsHelper {
                         client: client,
                         libraryViewModel: libraryViewModel
                     )
-                    onSuccess?()
                 } catch {
                     self.presentPlaylistDeletionError(error)
                 }
