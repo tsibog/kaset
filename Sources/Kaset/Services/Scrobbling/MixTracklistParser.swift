@@ -54,8 +54,10 @@ final class MixTracklistParser {
                 let endTime: TimeInterval? = if index + 1 < chapters.count {
                     chapters[index + 1].startTime
                 } else {
-                    // Last chapter — endTime stays nil (until end of video)
-                    nil
+                    // The final chapter has no following start time, but macro-marker data may
+                    // still carry its explicit bound. Keep it so short closing tracks can qualify
+                    // via the normal percentage threshold instead of requiring minSeconds.
+                    chapter.endTime
                 }
 
                 return MixTrackEntry(

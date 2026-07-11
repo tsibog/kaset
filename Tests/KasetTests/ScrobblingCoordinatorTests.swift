@@ -635,4 +635,52 @@ struct ScrobblingCoordinatorTests {
         await self.waitUntil(timeout: .milliseconds(200)) { mockYouTube.getWatchNextCallCount >= 1 }
         #expect(mockYouTube.getWatchNextCallCount == 0)
     }
+
+    @Test("A stale mix fetch does not block the next track's fetch")
+    func staleMixFetchDoesNotBlockNextTrack() async throws {
+        let dir = try self.makeTemporaryDirectory()
+        defer { self.cleanupDirectory(dir) }
+
+        let firstRequestGate = AsyncGate()
+        let mockYouTube = MockYouTubeClient()
+        mockYouTube.watchNextData = self.makeWatchNextData(chapters: self.makeMixChapters())
+        mockYouTube.beforeWatchNextReturn = { videoId in
+            if videoId == "mix1" {
+                await firstRequestGate.wait()
+            }
+        }
+        let parser = MixTracklistParser(youTubeClient: mockYouTube)
+
+        let mockService = MockScrobbleService()
+        mockService.authState = .connected(username: "testuser")
+        let settings = SettingsManager.shared
+        settings.setServiceEnabled("Mock", true)
+        defer { settings.setServiceEnabled("Mock", false) }
+
+        let playerService = PlayerService()
+        playerService.currentTrack = TestFixtures.makeSong(id: "mix1", title: "First Mix", duration: 3600)
+        playerService.state = .playing
+        playerService.duration = 3600
+
+        let coordinator = ScrobblingCoordinator(
+            playerService: playerService,
+            settingsManager: settings,
+            services: [mockService],
+            queue: ScrobbleQueue(directory: dir),
+            mixTracklistParser: parser
+        )
+        coordinator.startMonitoring()
+        defer { coordinator.stopMonitoring() }
+
+        await self.waitUntil { mockYouTube.getWatchNextCallCount == 1 }
+        #expect(mockYouTube.requestedWatchNextVideoIds == ["mix1"])
+
+        // The first request remains suspended while playback moves to another long mix. The new
+        // track must start its own parse immediately rather than waiting for the stale request.
+        playerService.currentTrack = TestFixtures.makeSong(id: "mix2", title: "Second Mix", duration: 3600)
+        await self.waitUntil { mockYouTube.getWatchNextCallCount == 2 }
+
+        #expect(mockYouTube.requestedWatchNextVideoIds == ["mix1", "mix2"])
+        await firstRequestGate.open()
+    }
 }

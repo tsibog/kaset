@@ -51,8 +51,11 @@ final class ScrobblingCoordinator {
     /// Play-time state machine for the current mix sub-track. Nil between entries.
     private var mixEntryTracker: PlaybackScrobbleTracker?
 
-    /// Whether a tracklist parse is in progress for the current track.
-    private var mixParseInProgress = false
+    /// In-flight tracklist parse for the current track. Cancelled on track changes and shutdown.
+    private var mixParseTask: Task<Void, Never>?
+
+    /// Monotonic token preventing a cancelled/stale parse from clearing or applying newer work.
+    private var mixParseGeneration = 0
 
     /// Whether a tracklist fetch has already been attempted for the current track.
     /// The fetch is gated on the track duration, which for YouTube playback is not yet
@@ -144,6 +147,8 @@ final class ScrobblingCoordinator {
         self.flushTaskGeneration += 1
         self.flushTask?.cancel()
         self.flushTask = nil
+        self.cancelMixTracklistFetch()
+        self.mixParseAttempted = false
         self.nowPlayingTasks.forEach { $0.cancel() }
         self.nowPlayingTasks.removeAll()
         self.isMonitoring = false
@@ -296,21 +301,25 @@ final class ScrobblingCoordinator {
     /// so it runs at most once per track. When a tracklist is found, the coordinator switches to
     /// mix-mode on the next poll.
     private func attemptMixTracklistFetch(for track: Song) {
-        guard let parser = self.mixTracklistParser, !self.mixParseInProgress, !self.mixParseAttempted else { return }
+        guard let parser = self.mixTracklistParser, self.mixParseTask == nil, !self.mixParseAttempted else { return }
 
         // Duration isn't reliably available at track-start; wait until it crosses the mix threshold.
         let duration = track.duration ?? self.playerService.duration
         guard duration > 600 else { return }
 
         self.mixParseAttempted = true
-        self.mixParseInProgress = true
+        self.mixParseGeneration += 1
+        let generation = self.mixParseGeneration
         let videoId = track.videoId
-        Task { [weak self] in
+        self.mixParseTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let tracklist = await parser.parseTracklist(videoId: videoId)
-            self.mixParseInProgress = false
-            // Only apply if we're still tracking the same track
-            guard self.currentTrackVideoId == videoId else { return }
+
+            // A track change may have cancelled this request and started another. Only the task
+            // owning the current generation may clear the in-flight slot or publish its result.
+            guard self.mixParseGeneration == generation else { return }
+            self.mixParseTask = nil
+            guard !Task.isCancelled, self.currentTrackVideoId == videoId else { return }
             if let tracklist, tracklist.isMix {
                 self.mixTracklist = tracklist
                 self.logger.info("Mix tracklist loaded: \(tracklist.entries.count) sub-tracks for \(track.title)")
@@ -320,7 +329,16 @@ final class ScrobblingCoordinator {
         }
     }
 
+    private func cancelMixTracklistFetch() {
+        self.mixParseGeneration += 1
+        self.mixParseTask?.cancel()
+        self.mixParseTask = nil
+    }
+
     private func finalizeCurrentTrack() {
+        // Never let a slow request for the previous video block or overwrite the next track.
+        self.cancelMixTracklistFetch()
+
         // Finalize mix-mode sub-track if active
         if self.mixTracklist != nil, let entry = self.currentMixEntry {
             self.finalizeMixEntry(entry, song: self.trackedSong)
@@ -365,8 +383,8 @@ final class ScrobblingCoordinator {
         )
     }
 
-    /// Scrobble thresholds for a mix sub-track. The final entry has no known end time, so an
-    /// unknown duration still qualifies via `minSeconds`.
+    /// Scrobble thresholds for a mix sub-track. YouTube does not always expose chapter bounds,
+    /// so an unknown duration still qualifies via `minSeconds`.
     private var mixEntryThresholds: PlaybackScrobbleTracker.Thresholds {
         .init(
             percent: self.settingsManager.scrobblePercentThreshold,

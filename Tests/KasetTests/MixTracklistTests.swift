@@ -50,6 +50,30 @@ struct MixTracklistTests {
         #expect(entry.duration == 100)
     }
 
+    @MainActor
+    @Test("Chapter parser preserves the final chapter's explicit end time")
+    func finalChapterEndTime() async {
+        let chapters = [
+            YouTubeChapter(videoId: "mix", title: "A - One", startTime: 0, endTime: 100, timeText: nil, thumbnailURL: nil),
+            YouTubeChapter(videoId: "mix", title: "B - Two", startTime: 100, endTime: 200, timeText: nil, thumbnailURL: nil),
+            YouTubeChapter(videoId: "mix", title: "C - Three", startTime: 200, endTime: 290, timeText: nil, thumbnailURL: nil),
+        ]
+        let mockYouTube = MockYouTubeClient()
+        mockYouTube.watchNextData = WatchNextData(
+            videoTitle: "Mix",
+            viewCountText: nil,
+            publishedText: nil,
+            channel: nil,
+            related: [],
+            chapters: chapters
+        )
+
+        let tracklist = await MixTracklistParser(youTubeClient: mockYouTube).parseTracklist(videoId: "mix")
+
+        #expect(tracklist?.entries.last?.endTime == 290)
+        #expect(tracklist?.entries.last?.duration == 90)
+    }
+
     // MARK: - isMix Threshold
 
     @Test("Three or more entries is a mix; fewer is not")

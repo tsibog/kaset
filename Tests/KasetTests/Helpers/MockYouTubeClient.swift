@@ -186,12 +186,22 @@ final class MockYouTubeClient: YouTubeClientProtocol {
     }
 
     private(set) var getWatchNextCallCount = 0
+    private(set) var requestedWatchNextVideoIds: [String] = []
 
-    func getWatchNext(videoId _: String) async throws -> WatchNextData {
+    /// Awaited inside `getWatchNext` before it returns, so a test can hold one mix parse open
+    /// while the coordinator switches tracks and starts a newer request.
+    var beforeWatchNextReturn: (@Sendable (String) async -> Void)?
+
+    func getWatchNext(videoId: String) async throws -> WatchNextData {
         self.getWatchNextCallCount += 1
+        self.requestedWatchNextVideoIds.append(videoId)
         if let error {
             throw error
         }
+        if let beforeWatchNextReturn {
+            await beforeWatchNextReturn(videoId)
+        }
+        try Task.checkCancellation()
         return self.watchNextData
     }
 
