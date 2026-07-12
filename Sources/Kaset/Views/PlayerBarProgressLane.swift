@@ -236,9 +236,10 @@ struct PlayerBarProgressLane: View {
         self.hoveredSegment = segment
     }
 
-    /// The segment whose span contains the given progress fraction (last one starting at or before it).
+    /// The segment whose `[start, end)` span contains the given progress fraction, or nil when the
+    /// fraction falls in a gap or outro past the last segment's end.
     private func segment(at fraction: Double) -> PlayerBarProgressSegment? {
-        self.segments.last { $0.start <= fraction }
+        self.segments.last { $0.contains(fraction) }
     }
 
     // MARK: - Segmented Track
