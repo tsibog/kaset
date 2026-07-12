@@ -140,22 +140,42 @@ struct NowPlayingTracklistProviderTests {
 
     /// Regression: `PlayerService.updateTrackMetadata` falls back to the previous videoId when
     /// YouTube's observer hasn't reported a fresh one yet, so a real track change can arrive with an
-    /// unchanged `videoId` — only the title/artist reveal it. Without resetting on that signal, the
-    /// previous mix's tracklist stayed attached to the new song, so the seek bar kept showing the old
-    /// segments and any consumer scrobbling from it would credit the wrong sub-tracks.
-    @Test("A metadata change with a stale videoId resets the tracklist and re-arms the fetch")
-    func metadataChangeWithStaleVideoIdResetsTracklist() async {
-        let (provider, _) = self.makeProvider(chapters: self.makeMixChapters())
+    /// unchanged `videoId` — only the title/artist reveal it. The provider must drop the stale
+    /// tracklist, but must NOT re-fetch under the stale id: the shared parser caches by videoId and
+    /// would hand the previous video's segments straight back onto the new track. Segments stay
+    /// cleared until a genuinely fresh videoId is observed.
+    @Test("A metadata change with a stale videoId clears segments and defers fetching until a fresh id")
+    func metadataChangeWithStaleVideoIdDefersFetch() async {
+        let (provider, mockYouTube) = self.makeProvider(chapters: self.makeMixChapters())
         let mixA = TestFixtures.makeSong(id: "mix1", title: "Mix A", duration: 1800)
         provider.update(track: mixA, duration: 1800)
         await self.waitUntil { provider.tracklist != nil }
         #expect(provider.tracklist != nil)
+        #expect(mockYouTube.getWatchNextCallCount == 1)
 
-        let mixB = TestFixtures.makeSong(id: "mix1", title: "Different Song", duration: 1800)
-        provider.update(track: mixB, duration: 1800)
-
+        let stale = TestFixtures.makeSong(id: "mix1", title: "Different Song", duration: 1800)
+        provider.update(track: stale, duration: 1800)
         #expect(provider.tracklist == nil, "stale tracklist from the previous song must not remain attached")
-        #expect(provider.isParsing, "a metadata-only change must re-arm the fetch latch even with a stale videoId")
+        #expect(!provider.isParsing, "must not re-fetch under a known-stale videoId")
+        #expect(mockYouTube.getWatchNextCallCount == 1, "no fetch may run while the videoId is known stale")
+
+        let fresh = TestFixtures.makeSong(id: "mix2", title: "Different Song", duration: 1800)
+        provider.update(track: fresh, duration: 1800)
+        await self.waitUntil { mockYouTube.getWatchNextCallCount == 2 }
+        #expect(mockYouTube.getWatchNextCallCount == 2, "a genuinely fresh videoId re-arms the fetch")
+    }
+
+    /// Regression: a `Song` can carry `duration: 0` as a provisional/unknown value before real
+    /// playback duration settles. Coalescing on nil alone kept `knownDuration` pinned at 0, so long
+    /// mixes never crossed the gate and never segmented. Zero must be treated as unknown and yield to
+    /// the player-reported duration.
+    @Test("A zero track duration is treated as unknown and yields to the player duration")
+    func zeroTrackDurationFallsBackToPlayerDuration() async {
+        let (provider, mockYouTube) = self.makeProvider(chapters: self.makeMixChapters())
+        let track = TestFixtures.makeSong(id: "mix1", title: "Long Mix", duration: 0)
+        provider.update(track: track, duration: 3600)
+        await self.waitUntil { mockYouTube.getWatchNextCallCount >= 1 }
+        #expect(mockYouTube.getWatchNextCallCount == 1, "zero track duration must not pin knownDuration below the gate")
     }
 
     // MARK: - Driver Integration

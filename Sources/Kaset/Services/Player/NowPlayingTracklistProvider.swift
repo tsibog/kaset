@@ -39,6 +39,12 @@ final class NowPlayingTracklistProvider {
     /// video even though `update` is called repeatedly as duration settles.
     private var attemptedVideoId: String?
 
+    /// Set when a metadata-only change (a track switch surfaced while the observed videoId is still
+    /// stale) clears the tracklist. Suppresses fetching until a genuinely fresh videoId is observed,
+    /// so the shared parser's per-videoId cache can't immediately re-attach the previous video's
+    /// segments to the new track.
+    private var awaitingFreshVideoId = false
+
     /// In-flight parse for the current video. Cancelled on video changes so a slow request for the
     /// previous video never blocks or overwrites the next one.
     private var parseTask: Task<Void, Never>?
@@ -68,14 +74,24 @@ final class NowPlayingTracklistProvider {
             && !videoIdChanged
             && (track.title != self.currentTrackTitle || track.artistsDisplay != self.currentTrackArtist)
 
-        if videoIdChanged || metadataChanged {
+        if videoIdChanged {
             self.reset(to: track.videoId)
+        } else if metadataChanged {
+            self.reset(to: track.videoId)
+            self.awaitingFreshVideoId = true
         }
         self.currentTrackTitle = track.title
         self.currentTrackArtist = track.artistsDisplay
 
+        // A metadata-only change means the observed videoId is stale; parsing it would return the
+        // previous video's cached segments, so hold off until a fresh videoId arrives.
+        guard !self.awaitingFreshVideoId else { return }
+
         // Duration isn't reliably available at track-start; wait until it crosses the mix threshold.
-        let knownDuration = track.duration ?? duration
+        // Treat a zero duration as unknown — it's the provisional value before real playback duration
+        // settles, and coalescing to it would pin `knownDuration` below the gate forever.
+        let trackDuration = track.duration ?? 0
+        let knownDuration = trackDuration > 0 ? trackDuration : duration
         guard self.tracklist == nil,
               self.attemptedVideoId != track.videoId,
               knownDuration > Self.minMixDuration
@@ -113,5 +129,6 @@ final class NowPlayingTracklistProvider {
         self.currentVideoId = videoId
         self.attemptedVideoId = nil
         self.tracklist = nil
+        self.awaitingFreshVideoId = false
     }
 }
