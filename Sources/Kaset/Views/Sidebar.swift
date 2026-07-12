@@ -127,8 +127,7 @@ struct Sidebar: View {
             .dropDestination(for: Song.self) { droppedSongs, _ in
                 self.handleDroppedSongs(
                     droppedSongs,
-                    playlistId: LikedMusicPlaylist.id,
-                    playlistTitle: NavigationItem.likedMusic.displayName,
+                    target: .likedMusic,
                     feedbackKey: Self.likedMusicNavDropKey
                 )
                 return true
@@ -153,42 +152,26 @@ struct Sidebar: View {
         HapticService.navigation()
     }
 
-    /// Adds each dropped song to the target playlist. Dropping onto Liked Music (the LM
-    /// auto-playlist) likes the song instead — `edit_playlist` doesn't apply to LM, and
-    /// `SongLikeStatusManager` broadcasts the change so like buttons update everywhere.
+    /// Adds each dropped song to the target through Library Mutation Orchestration, then maps the
+    /// outcome to haptics and the confirmation badge. Liked Music routing lives in the orchestrator.
     private func handleDroppedSongs(
         _ songs: [Song],
-        playlistId: String,
-        playlistTitle: String,
+        target: PlaylistDropTarget,
         feedbackKey: String
     ) {
         for song in songs {
             Task {
-                if playlistId == LikedMusicPlaylist.id {
-                    let status = await self.likeStatusManager.like(song, client: self.client)
-                    if status == .like {
-                        HapticService.success()
-                        DiagnosticsLogger.api.info("Drag-drop: liked '\(song.title)'")
-                        self.flashDropFeedback(for: feedbackKey)
-                    } else {
-                        DiagnosticsLogger.api.error("Drag-drop: failed to like '\(song.title)'")
-                        HapticService.error()
-                    }
-                    return
-                }
-
-                do {
-                    try await self.client.addSongToPlaylist(
-                        videoId: song.videoId,
-                        playlistId: playlistId,
-                        allowDuplicate: false
-                    )
-                    SongActionsHelper.invalidateLibraryResponseCaches()
+                let outcome = await LibraryMutationActions.addSong(
+                    song,
+                    to: target,
+                    client: self.client,
+                    likeStatusManager: self.likeStatusManager
+                )
+                switch outcome {
+                case .added, .liked:
                     HapticService.success()
-                    DiagnosticsLogger.api.info("Drag-drop: added '\(song.title)' to playlist '\(playlistTitle)'")
                     self.flashDropFeedback(for: feedbackKey)
-                } catch {
-                    DiagnosticsLogger.api.error("Drag-drop: failed to add '\(song.title)' to playlist '\(playlistTitle)': \(error.localizedDescription)")
+                case .failed:
                     HapticService.error()
                 }
             }
@@ -247,8 +230,7 @@ struct Sidebar: View {
             guard isDropEligible else { return false }
             self.handleDroppedSongs(
                 droppedSongs,
-                playlistId: item.contentId,
-                playlistTitle: item.title,
+                target: PlaylistDropTarget(playlistId: item.contentId),
                 feedbackKey: item.contentId
             )
             return true

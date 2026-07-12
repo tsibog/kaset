@@ -395,6 +395,22 @@ struct ModelTests {
         #expect(item.acceptsSongDrops)
     }
 
+    @Test("SidebarPinnedItem accepts song drops for VL-prefixed Liked Music regardless of canDelete")
+    func sidebarPinnedItemAcceptsDropsForBrowseIdLikedMusic() {
+        let playlist = Playlist(
+            id: LikedMusicPlaylist.browseID,
+            title: "Liked Music",
+            description: nil,
+            thumbnailURL: nil,
+            trackCount: nil,
+            canDelete: false
+        )
+
+        let item = SidebarPinnedItem.from(playlist)
+        #expect(item.acceptsSongDrops)
+        #expect(PlaylistDropTarget(playlistId: item.contentId) == .likedMusic)
+    }
+
     @Test("SidebarPinnedItem rejects song drops for albums")
     func sidebarPinnedItemRejectsDropsForAlbum() {
         let album = Album(
