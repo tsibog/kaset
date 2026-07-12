@@ -144,12 +144,12 @@ struct KasetApp: App {
         player.setNowPlayingTracklistProvider(tracklistProvider)
         _nowPlayingTracklistProvider = State(initialValue: tracklistProvider)
 
-        // Create scrobbling coordinator; it reads the tracklist from the shared provider.
+        // Create scrobbling coordinator; it shares the mix tracklist parser with the seek bar.
         let lastFMService = LastFMService(credentialStore: KeychainCredentialStore())
         let scrobblingCoordinator = ScrobblingCoordinator(
             playerService: player,
             services: [lastFMService],
-            nowPlayingTracklistProvider: tracklistProvider
+            mixTracklistParser: mixTracklistParser
         )
         scrobblingCoordinator.restoreAuthState()
         scrobblingCoordinator.startMonitoring()
@@ -158,6 +158,7 @@ struct KasetApp: App {
         // Wire up PlayerService to AppDelegate immediately (not in onAppear)
         // This ensures playerService is available for lifecycle events like queue restoration
         self.appDelegate.playerService = player
+        self.appDelegate.scrobblingCoordinator = scrobblingCoordinator
 
         if UITestConfig.isUITestMode {
             DiagnosticsLogger.ui.info("App launched in UI Test mode")

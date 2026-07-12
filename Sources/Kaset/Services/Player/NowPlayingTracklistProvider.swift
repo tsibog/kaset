@@ -18,6 +18,10 @@ final class NowPlayingTracklistProvider {
     /// The tracklist for the currently-playing item, or nil when it isn't a mix (or isn't known yet).
     private(set) var tracklist: MixTracklist?
 
+    /// Minimum known duration before attempting a tracklist fetch: below this a video can't be a mix
+    /// worth segmenting. Matches the scrobbler's mix-detection floor.
+    private static let minMixDuration: TimeInterval = 600
+
     private let parser: MixTracklistParser?
     private let logger = DiagnosticsLogger.player
 
@@ -60,7 +64,7 @@ final class NowPlayingTracklistProvider {
         let knownDuration = track.duration ?? duration
         guard self.tracklist == nil,
               self.attemptedVideoId != track.videoId,
-              knownDuration > MixTracklist.minMixDuration
+              knownDuration > Self.minMixDuration
         else { return }
 
         guard let parser else { return }

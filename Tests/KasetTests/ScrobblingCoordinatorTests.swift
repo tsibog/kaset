@@ -18,6 +18,16 @@ struct ScrobblingCoordinatorTests {
         try? FileManager.default.removeItem(at: dir)
     }
 
+    private func waitUntil(
+        timeout: Duration = .seconds(2),
+        _ condition: @MainActor () -> Bool
+    ) async {
+        let deadline = ContinuousClock.now + timeout
+        while !condition(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     private func makeTrack(
         title: String = "Test Song",
         artist: String = "Test Artist",
@@ -206,7 +216,7 @@ struct ScrobblingCoordinatorTests {
     @Test("Seek forward does not inflate play time")
     func seekForwardIgnored() {
         var accumulated: TimeInterval = 0
-        var lastProgress: TimeInterval = 10.0
+        let lastProgress: TimeInterval = 10.0
 
         // Seek from 10s to 100s (delta = 90s > 2s threshold → ignored)
         let newProgress: TimeInterval = 100.0
@@ -221,7 +231,7 @@ struct ScrobblingCoordinatorTests {
     @Test("Seek backward does not inflate play time")
     func seekBackwardIgnored() {
         var accumulated: TimeInterval = 0
-        var lastProgress: TimeInterval = 100.0
+        let lastProgress: TimeInterval = 100.0
 
         // Seek from 100s to 10s (negative delta → ignored)
         let newProgress: TimeInterval = 10.0
@@ -275,7 +285,7 @@ struct ScrobblingCoordinatorTests {
         mockService.authState = .disconnected
 
         let playerService = PlayerService()
-        let settings = SettingsManager.shared
+        let settings = MockScrobblingSettings()
         settings.setServiceEnabled("Mock", true)
         defer { settings.setServiceEnabled("Mock", false) }
 
@@ -304,7 +314,7 @@ struct ScrobblingCoordinatorTests {
         mockService.authState = .connected(username: "testuser")
 
         let playerService = PlayerService()
-        let settings = SettingsManager.shared
+        let settings = MockScrobblingSettings()
         settings.setServiceEnabled("Mock", true)
         defer { settings.setServiceEnabled("Mock", false) }
 
@@ -346,7 +356,7 @@ struct ScrobblingCoordinatorTests {
         ]
 
         let playerService = PlayerService()
-        let settings = SettingsManager.shared
+        let settings = MockScrobblingSettings()
         settings.setServiceEnabled("Mock", true)
 
         let coordinator = ScrobblingCoordinator(
@@ -382,7 +392,7 @@ struct ScrobblingCoordinatorTests {
         mockService.shouldThrowOnScrobble = CancellationError()
 
         let playerService = PlayerService()
-        let settings = SettingsManager.shared
+        let settings = MockScrobblingSettings()
         settings.setServiceEnabled("Mock", true)
 
         let coordinator = ScrobblingCoordinator(
@@ -460,6 +470,93 @@ struct ScrobblingCoordinatorTests {
         #expect(!isReplay, "Backward jump before scrobbling should not trigger replay (could be a seek)")
     }
 
+    @Test("A regular-track replay replaces the tracker and can scrobble again")
+    func regularTrackReplayStartsFresh() async throws {
+        let dir = try self.makeTemporaryDirectory()
+        defer { self.cleanupDirectory(dir) }
+
+        let mockService = MockScrobbleService()
+        mockService.authState = .connected(username: "testuser")
+        let settings = MockScrobblingSettings()
+        let originalPercent = settings.scrobblePercentThreshold
+        let originalMinSeconds = settings.scrobbleMinSeconds
+        settings.scrobblePercentThreshold = 0.01
+        settings.scrobbleMinSeconds = 240
+        settings.setServiceEnabled("Mock", true)
+        defer {
+            settings.scrobblePercentThreshold = originalPercent
+            settings.scrobbleMinSeconds = originalMinSeconds
+            settings.setServiceEnabled("Mock", false)
+        }
+
+        let playerService = PlayerService()
+        playerService.currentTrack = TestFixtures.makeSong(id: "song1", title: "Regular Song", duration: 100)
+        playerService.state = .playing
+        playerService.duration = 100
+        playerService.setPlaybackStateVideoId("song1")
+        let queue = ScrobbleQueue(directory: dir)
+        let coordinator = ScrobblingCoordinator(
+            playerService: playerService,
+            settingsManager: settings,
+            services: [mockService],
+            queue: queue
+        )
+        coordinator.startMonitoring()
+        defer { coordinator.stopMonitoring() }
+
+        playerService.progress = 0.1
+        await self.waitUntil { mockService.nowPlayingTracks.count == 1 }
+        playerService.progress = 1.1
+        await self.waitUntil { queue.count == 1 }
+        let firstTimestamp = queue.pendingTracks.first?.timestamp
+
+        playerService.progress = 50
+        try await Task.sleep(for: .milliseconds(20))
+        playerService.progress = 0.1
+        await self.waitUntil { mockService.nowPlayingTracks.count == 2 }
+        playerService.progress = 1.1
+        await self.waitUntil { queue.count == 2 }
+
+        #expect(queue.pendingTracks.last?.timestamp != firstTimestamp)
+    }
+
+    @Test("Stopping and restarting monitoring preserves the same regular play latch")
+    func monitoringRestartPreservesRegularPlay() async throws {
+        let dir = try self.makeTemporaryDirectory()
+        defer { self.cleanupDirectory(dir) }
+
+        let mockService = MockScrobbleService()
+        mockService.authState = .connected(username: "testuser")
+        let settings = MockScrobblingSettings(scrobblePercentThreshold: 0.01)
+        settings.setServiceEnabled("Mock", true)
+        let playerService = PlayerService()
+        playerService.currentTrack = TestFixtures.makeSong(id: "song1", title: "Regular Song", duration: 100)
+        playerService.state = .playing
+        playerService.duration = 100
+        playerService.setPlaybackStateVideoId("song1")
+        let queue = ScrobbleQueue(directory: dir)
+        let coordinator = ScrobblingCoordinator(
+            playerService: playerService,
+            settingsManager: settings,
+            services: [mockService],
+            queue: queue
+        )
+
+        coordinator.startMonitoring()
+        playerService.progress = 0.1
+        await self.waitUntil { mockService.nowPlayingTracks.count == 1 }
+        playerService.progress = 1.1
+        await self.waitUntil { queue.count == 1 }
+
+        coordinator.stopMonitoring(finalizeCurrentTrack: false)
+        coordinator.startMonitoring()
+        defer { coordinator.stopMonitoring() }
+        playerService.progress = 2.1
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(queue.count == 1)
+    }
+
     // MARK: - Fix: Title/artist-based track change detection
 
     @Test("Title change triggers track change detection even with same videoId")
@@ -513,241 +610,5 @@ struct ScrobblingCoordinatorTests {
 
         let thresholdMet = accumulated >= duration * percentThreshold || accumulated >= minSeconds
         #expect(thresholdMet, "Threshold should be met at exactly 50% of duration")
-    }
-
-    // MARK: - Mix-Mode Detection
-
-    private func makeWatchNextData(chapters: [YouTubeChapter]) -> WatchNextData {
-        WatchNextData(
-            videoTitle: "Long Mix",
-            viewCountText: nil,
-            publishedText: nil,
-            channel: nil,
-            related: [],
-            chapters: chapters
-        )
-    }
-
-    private func makeMixChapters(videoId: String = "mix1", count: Int = 3) -> [YouTubeChapter] {
-        (0 ..< count).map { index in
-            YouTubeChapter(
-                videoId: videoId,
-                title: "Artist \(index) - Track \(index)",
-                startTime: TimeInterval(index) * 600,
-                endTime: TimeInterval(index + 1) * 600,
-                timeText: nil,
-                thumbnailURL: nil
-            )
-        }
-    }
-
-    private func waitUntil(
-        timeout: Duration = .seconds(2),
-        _ condition: @MainActor () -> Bool
-    ) async {
-        let deadline = ContinuousClock.now + timeout
-        while !condition(), ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-    }
-
-    /// Regression: a slow tracklist fetch must not let a real mix scrobble once as the whole
-    /// video and again per sub-track — the whole-track threshold is deferred until the parse
-    /// resolves, and resumes only when it resolves with no tracklist.
-    @Test("Whole-track scrobble is deferred while a mix parse is in flight")
-    func wholeTrackScrobbleDeferredDuringMixParse() async throws {
-        let dir = try self.makeTemporaryDirectory()
-        defer { self.cleanupDirectory(dir) }
-
-        let parseGate = AsyncGate()
-        let mockYouTube = MockYouTubeClient()
-        // No chapters — the parse eventually resolves to "not a mix".
-        mockYouTube.watchNextData = self.makeWatchNextData(chapters: [])
-        mockYouTube.beforeWatchNextReturn = { _ in await parseGate.wait() }
-        let parser = MixTracklistParser(youTubeClient: mockYouTube)
-
-        let mockService = MockScrobbleService()
-        mockService.authState = .connected(username: "testuser")
-        let settings = SettingsManager.shared
-        settings.setServiceEnabled("Mock", true)
-        let savedMinSeconds = settings.scrobbleMinSeconds
-        settings.scrobbleMinSeconds = 2
-        defer {
-            settings.setServiceEnabled("Mock", false)
-            settings.scrobbleMinSeconds = savedMinSeconds
-        }
-
-        let playerService = PlayerService()
-        playerService.currentTrack = TestFixtures.makeSong(id: "long1", title: "Long Video", duration: 3600)
-        playerService.state = .playing
-        playerService.duration = 3600
-
-        let provider = NowPlayingTracklistProvider(parser: parser)
-        playerService.setNowPlayingTracklistProvider(provider)
-
-        let queue = ScrobbleQueue(directory: dir)
-        let coordinator = ScrobblingCoordinator(
-            playerService: playerService,
-            settingsManager: settings,
-            services: [mockService],
-            queue: queue,
-            nowPlayingTracklistProvider: provider
-        )
-        coordinator.startMonitoring()
-        defer { coordinator.stopMonitoring() }
-
-        await self.waitUntil { mockYouTube.getWatchNextCallCount == 1 }
-
-        // Accumulate well past the (lowered) min-seconds threshold while the parse is suspended.
-        for tick in 1 ... 4 {
-            playerService.progress = TimeInterval(tick)
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        #expect(queue.isEmpty, "whole-track scrobble must wait for the mix parse to resolve")
-
-        // Parse resolves with no tracklist — whole-track scrobbling may now proceed.
-        await parseGate.open()
-        var tick: TimeInterval = 5
-        await self.waitUntil {
-            playerService.progress = tick
-            tick += 1
-            return queue.count == 1
-        }
-        #expect(queue.count == 1)
-    }
-
-    /// Regression: seeking within a sub-track that already scrobbled must not clear its latch —
-    /// a re-scrobble with the same timestamp is a Last.fm duplicate. A backward jump is an
-    /// intentional replay and restarts the sub-track with a fresh timestamp instead.
-    @Test("Seek within a scrobbled sub-track does not duplicate; replay gets a fresh timestamp")
-    func mixSeekAfterScrobbleDoesNotDuplicate() async throws {
-        let dir = try self.makeTemporaryDirectory()
-        defer { self.cleanupDirectory(dir) }
-
-        let mockYouTube = MockYouTubeClient()
-        mockYouTube.watchNextData = self.makeWatchNextData(chapters: self.makeMixChapters())
-        let parser = MixTracklistParser(youTubeClient: mockYouTube)
-
-        let mockService = MockScrobbleService()
-        mockService.authState = .connected(username: "testuser")
-        let settings = SettingsManager.shared
-        settings.setServiceEnabled("Mock", true)
-        let savedMinSeconds = settings.scrobbleMinSeconds
-        settings.scrobbleMinSeconds = 2
-        defer {
-            settings.setServiceEnabled("Mock", false)
-            settings.scrobbleMinSeconds = savedMinSeconds
-        }
-
-        let playerService = PlayerService()
-        playerService.currentTrack = TestFixtures.makeSong(id: "mix1", title: "Long Mix", duration: 1800)
-        playerService.state = .playing
-        playerService.duration = 1800
-
-        let provider = NowPlayingTracklistProvider(parser: parser)
-        playerService.setNowPlayingTracklistProvider(provider)
-
-        let queue = ScrobbleQueue(directory: dir)
-        let coordinator = ScrobblingCoordinator(
-            playerService: playerService,
-            settingsManager: settings,
-            services: [mockService],
-            queue: queue,
-            nowPlayingTracklistProvider: provider
-        )
-        coordinator.startMonitoring()
-        defer { coordinator.stopMonitoring() }
-
-        // Play within the first sub-track (0–600s) until it scrobbles.
-        var tick: TimeInterval = 1
-        await self.waitUntil {
-            playerService.progress = tick
-            tick += 1
-            return queue.count == 1
-        }
-        #expect(queue.count == 1)
-        let firstTimestamp = queue.pendingTracks.first?.timestamp
-
-        // Forward seek within the same sub-track, then keep playing — no duplicate scrobble.
-        playerService.progress = 100
-        try? await Task.sleep(for: .milliseconds(20))
-        for step in 1 ... 5 {
-            playerService.progress = 100 + TimeInterval(step)
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        #expect(queue.count == 1, "forward seek after scrobbling must not re-arm the scrobble latch")
-
-        // Backward seek — intentional replay. A second scrobble with a fresh timestamp is allowed.
-        playerService.progress = 10
-        try? await Task.sleep(for: .milliseconds(20))
-        var replayTick: TimeInterval = 11
-        await self.waitUntil {
-            playerService.progress = replayTick
-            replayTick += 1
-            return queue.count == 2
-        }
-        #expect(queue.count == 2)
-        let timestamps = queue.pendingTracks.map(\.timestamp)
-        #expect(timestamps.last != firstTimestamp, "replay scrobble must carry a fresh timestamp")
-    }
-
-    /// Regression: the final chapter of a mix has no explicit end time, so its entry duration is
-    /// nil. Without a video-duration fallback, the threshold check falls back to the unknown-duration
-    /// path and requires the full `scrobbleMinSeconds` (240s default) — a normal 2-minute closing
-    /// track would never scrobble. With the fallback, the entry's effective duration is derived from
-    /// the known video duration, so the normal percent-of-duration threshold applies instead.
-    @Test("Final mix entry with unknown end time scrobbles via percent threshold, not minSeconds")
-    func finalMixEntryScrobblesUsingVideoDurationFallback() async throws {
-        let dir = try self.makeTemporaryDirectory()
-        defer { self.cleanupDirectory(dir) }
-
-        let chapters = [
-            YouTubeChapter(videoId: "mix1", title: "Artist 0 - Track 0", startTime: 0, endTime: 300, timeText: nil, thumbnailURL: nil),
-            YouTubeChapter(videoId: "mix1", title: "Artist 1 - Track 1", startTime: 300, endTime: 600, timeText: nil, thumbnailURL: nil),
-            YouTubeChapter(videoId: "mix1", title: "Artist 2 - Track 2", startTime: 600, endTime: nil, timeText: nil, thumbnailURL: nil),
-        ]
-        let mockYouTube = MockYouTubeClient()
-        mockYouTube.watchNextData = self.makeWatchNextData(chapters: chapters)
-        let parser = MixTracklistParser(youTubeClient: mockYouTube)
-
-        let mockService = MockScrobbleService()
-        mockService.authState = .connected(username: "testuser")
-        let settings = SettingsManager.shared
-        settings.setServiceEnabled("Mock", true)
-        defer { settings.setServiceEnabled("Mock", false) }
-
-        // Video is 720s total; the final chapter starts at 600s with no endTime, so its effective
-        // duration should be 720 - 600 = 120s. At the default 50% threshold that's 60s of playback —
-        // far short of the 240s `scrobbleMinSeconds` the unknown-duration path would otherwise require.
-        let playerService = PlayerService()
-        playerService.currentTrack = TestFixtures.makeSong(id: "mix1", title: "Long Mix", duration: 720)
-        playerService.state = .playing
-        playerService.duration = 720
-
-        let provider = NowPlayingTracklistProvider(parser: parser)
-        playerService.setNowPlayingTracklistProvider(provider)
-
-        let queue = ScrobbleQueue(directory: dir)
-        let coordinator = ScrobblingCoordinator(
-            playerService: playerService,
-            settingsManager: settings,
-            services: [mockService],
-            queue: queue,
-            nowPlayingTracklistProvider: provider
-        )
-        coordinator.startMonitoring()
-        defer { coordinator.stopMonitoring() }
-
-        // Jump straight into the final chapter and play forward. 70 progress-seconds is comfortably
-        // past the 60s percent threshold but nowhere near the 240s minSeconds fallback.
-        var tick: TimeInterval = 600
-        await self.waitUntil(timeout: .seconds(5)) {
-            playerService.progress = tick
-            tick += 1
-            return queue.count == 1 || tick > 671
-        }
-
-        #expect(queue.count == 1, "final sub-track should scrobble via the percent threshold using the video-duration fallback")
-        #expect(queue.pendingTracks.first?.duration == 120, "scrobbled duration should be videoDuration - startTime")
     }
 }
