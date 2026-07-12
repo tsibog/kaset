@@ -70,11 +70,7 @@ struct HoverObservingRow<Content: View>: View {
     @State private var isHovered: Bool = false
 
     var body: some View {
-        if let song = self.song {
-            self.hoverContent.draggable(song)
-        } else {
-            self.hoverContent
-        }
+        self.hoverContent.songDraggable(self.song)
     }
 
     private var hoverContent: some View {
