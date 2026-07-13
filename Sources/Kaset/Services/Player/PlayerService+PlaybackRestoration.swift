@@ -22,24 +22,26 @@ extension PlayerService {
         observedVideoId: String?
     ) {
         let previousProgress = self.progress
-        self.recordPlaybackStateObservation(videoId: observedVideoId)
+        self.isApplyingPlaybackStateObservation = true
 
-        guard !self.isRestoringPlaybackSession else {
+        if self.isRestoringPlaybackSession {
             self.reconcileRestoredPlaybackState(
                 isPlaying: isPlaying,
                 progress: progress,
                 duration: duration,
                 previousProgress: previousProgress
             )
-            return
+        } else {
+            self.applyObservedPlaybackState(
+                isPlaying: isPlaying,
+                progress: progress,
+                duration: duration,
+                previousProgress: previousProgress
+            )
         }
 
-        self.applyObservedPlaybackState(
-            isPlaying: isPlaying,
-            progress: progress,
-            duration: duration,
-            previousProgress: previousProgress
-        )
+        self.isApplyingPlaybackStateObservation = false
+        self.recordPlaybackStateObservation(videoId: observedVideoId, duration: self.duration)
     }
 
     /// Applies a previously persisted playback session in a paused, resume-ready state.
@@ -74,6 +76,7 @@ extension PlayerService {
 
         self.progress = clampedProgress
         self.duration = resolvedDuration
+        self.recordDurationObservation(videoId: currentSong.videoId, duration: resolvedDuration)
         self.state = .paused
         self.pendingRestoredSeek = clampedProgress
         self.isPendingRestoredLoadDeferred = true

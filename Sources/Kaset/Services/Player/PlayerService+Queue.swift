@@ -785,7 +785,8 @@ extension PlayerService {
                 return min(max(self.currentIndex, 0), persistableQueue.count - 1)
             }()
             let currentVideoId = self.currentTrack?.videoId ?? persistableQueue[safe: safeIndex]?.videoId
-            let resolvedDuration = max(self.duration, self.currentTrack?.duration ?? persistableQueue[safe: safeIndex]?.duration ?? 0)
+            let persistenceTrack = self.currentTrack ?? persistableQueue[safe: safeIndex]
+            let resolvedDuration = self.bestKnownDuration(for: persistenceTrack)
             let clampedProgress = resolvedDuration > 0
                 ? min(max(self.progress, 0), resolvedDuration)
                 : max(self.progress, 0)

@@ -35,6 +35,7 @@ final class NowPlayingTracklistProvider {
     /// In-flight parse for the current video. Cancelled on video changes so a slow request for the
     /// previous video never blocks or overwrites the next one.
     private var parseTask: Task<Void, Never>?
+    private var parseGeneration = 0
 
     /// Whether a tracklist parse is in flight for the current video. Consumers that would act on
     /// "this is not a mix" (e.g. whole-track scrobbling) should wait until this settles.
@@ -56,15 +57,19 @@ final class NowPlayingTracklistProvider {
             return
         }
 
+        let normalizedVideoId = track.videoId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedVideoId.isEmpty, normalizedVideoId != "unknown" else {
+            self.reset(to: nil)
+            return
+        }
+
         if track.videoId != self.currentVideoId {
             self.reset(to: track.videoId)
         }
 
-        // Duration isn't reliably available at track-start; wait until it crosses the mix threshold.
-        let knownDuration = track.duration ?? duration
         guard self.tracklist == nil,
               self.attemptedVideoId != track.videoId,
-              knownDuration > Self.minMixDuration
+              duration > Self.minMixDuration
         else { return }
 
         guard let parser else { return }
@@ -72,15 +77,13 @@ final class NowPlayingTracklistProvider {
         self.attemptedVideoId = track.videoId
         let videoId = track.videoId
         let title = track.title
+        let generation = self.parseGeneration
         self.parseTask = Task { [weak self] in
             let parsed = await parser.parseTracklist(videoId: videoId)
             guard let self else { return }
-            // Only the task for the current video owns the in-flight slot; a stale task's slot
-            // was already cleared (and possibly re-occupied) by `reset(to:)`.
-            if self.currentVideoId == videoId {
-                self.parseTask = nil
-            }
-            guard !Task.isCancelled, self.currentVideoId == videoId else { return }
+            guard self.currentVideoId == videoId, self.parseGeneration == generation else { return }
+            self.parseTask = nil
+            guard !Task.isCancelled else { return }
             if let parsed, parsed.isMix {
                 self.tracklist = parsed
                 self.logger.info("Now-playing tracklist loaded: \(parsed.entries.count) sub-tracks for \(title)")
@@ -96,6 +99,7 @@ final class NowPlayingTracklistProvider {
     private func reset(to videoId: String?) {
         self.parseTask?.cancel()
         self.parseTask = nil
+        self.parseGeneration &+= 1
         self.currentVideoId = videoId
         self.attemptedVideoId = nil
         self.tracklist = nil

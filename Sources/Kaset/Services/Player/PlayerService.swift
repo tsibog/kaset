@@ -70,9 +70,12 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     /// Currently playing track.
     var currentTrack: Song? {
         didSet {
-            self.nowPlayingTracklistProvider?.update(track: self.currentTrack, duration: self.duration)
+            self.driveNowPlayingTracklistProvider()
         }
     }
+
+    @ObservationIgnored private var durationObservation: (videoId: String, duration: TimeInterval)?
+    @ObservationIgnored var isApplyingPlaybackStateObservation = false
 
     /// Artist-page episode backing the current playback, when applicable.
     var currentEpisode: ArtistEpisode?
@@ -95,7 +98,8 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     /// Total duration of current track in seconds.
     var duration: TimeInterval = 0 {
         didSet {
-            self.nowPlayingTracklistProvider?.update(track: self.currentTrack, duration: self.duration)
+            guard !self.isApplyingPlaybackStateObservation else { return }
+            self.recordDurationObservation(videoId: self.playbackStateVideoId, duration: self.duration)
         }
     }
 
@@ -108,12 +112,49 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     private(set) var playbackStateObservationSequence = 0
 
     func setPlaybackStateVideoId(_ videoId: String?) {
-        self.playbackStateVideoId = videoId
+        self.playbackStateVideoId = self.normalizedPlaybackVideoId(videoId)
+        self.recordDurationObservation(videoId: self.playbackStateVideoId, duration: self.duration)
     }
 
-    func recordPlaybackStateObservation(videoId: String?) {
+    func recordPlaybackStateObservation(videoId: String?, duration: TimeInterval) {
         self.playbackStateObservationSequence &+= 1
-        self.playbackStateVideoId = videoId
+        self.playbackStateVideoId = self.normalizedPlaybackVideoId(videoId)
+        self.recordDurationObservation(videoId: self.playbackStateVideoId, duration: duration)
+    }
+
+    func normalizedPlaybackVideoId(_ videoId: String?) -> String? {
+        guard let normalized = videoId?.trimmingCharacters(in: .whitespacesAndNewlines), !normalized.isEmpty else {
+            return nil
+        }
+        return normalized
+    }
+
+    func bestKnownDuration(for track: Song?) -> TimeInterval {
+        guard let track else { return 0 }
+        let trackDuration = track.duration.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 0
+        guard let durationObservation, durationObservation.videoId == track.videoId else {
+            return trackDuration
+        }
+        return max(trackDuration, durationObservation.duration)
+    }
+
+    func observedDuration(for videoId: String) -> TimeInterval? {
+        guard let durationObservation, durationObservation.videoId == videoId else { return nil }
+        return durationObservation.duration
+    }
+
+    func recordDurationObservation(videoId: String?, duration: TimeInterval) {
+        if let videoId, duration.isFinite, duration > 0 {
+            self.durationObservation = (videoId, duration)
+        }
+        self.driveNowPlayingTracklistProvider()
+    }
+
+    private func driveNowPlayingTracklistProvider() {
+        self.nowPlayingTracklistProvider?.update(
+            track: self.currentTrack,
+            duration: self.bestKnownDuration(for: self.currentTrack)
+        )
     }
 
     /// Current volume (0.0 - 1.0).
@@ -631,7 +672,7 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     /// with the current track so segments resolve even if playback started before wiring.
     func setNowPlayingTracklistProvider(_ provider: NowPlayingTracklistProvider) {
         self.nowPlayingTracklistProvider = provider
-        provider.update(track: self.currentTrack, duration: self.duration)
+        self.driveNowPlayingTracklistProvider()
     }
 
     /// Account-backed library/rating mutations should be no-ops in guest mode.

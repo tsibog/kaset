@@ -31,13 +31,8 @@ extension PlayerService {
         return !self.canAdvanceNativeQueueAfterTrackEnd
     }
 
-    private func normalizedObservedVideoId(_ videoId: String?) -> String? {
-        guard let videoId, !videoId.isEmpty else { return nil }
-        return videoId
-    }
-
     private func resolvedObservedVideoId(_ videoId: String?) -> String {
-        self.normalizedObservedVideoId(videoId) ?? self.currentTrack?.videoId ?? self.pendingPlayVideoId ?? "unknown"
+        self.normalizedPlaybackVideoId(videoId) ?? self.currentTrack?.videoId ?? self.pendingPlayVideoId ?? "unknown"
     }
 
     private func observedTrackMatchesSong(
@@ -46,7 +41,7 @@ extension PlayerService {
         artist: String,
         song: Song
     ) -> Bool {
-        if let observedVideoId = self.normalizedObservedVideoId(observedVideoId) {
+        if let observedVideoId = self.normalizedPlaybackVideoId(observedVideoId) {
             return song.videoId == observedVideoId
         }
         return song.title == title && song.artistsDisplay == artist
@@ -165,7 +160,7 @@ extension PlayerService {
             return false
         }
 
-        let matchesObservedVideo = self.normalizedObservedVideoId(observedVideoId) == intendedSong.videoId
+        let matchesObservedVideo = self.normalizedPlaybackVideoId(observedVideoId) == intendedSong.videoId
         if matchesObservedVideo, self.shouldKeepQueueMetadata(title: title, artist: artist, song: intendedSong) {
             self.isKasetInitiatedPlayback = false
             self.logger.debug(
@@ -292,7 +287,7 @@ extension PlayerService {
             return false
         }
 
-        let observedNorm = self.normalizedObservedVideoId(observedVideoId)
+        let observedNorm = self.normalizedPlaybackVideoId(observedVideoId)
         let videoMismatch = observedNorm.map { $0 != queued.videoId } ?? false
         let titleDriftWithoutVideoId =
             observedNorm == nil
@@ -330,7 +325,7 @@ extension PlayerService {
         trackChanged: Bool
     ) -> Bool {
         guard !self.queue.isEmpty,
-              let observedVideoId = self.normalizedObservedVideoId(observedVideoId),
+              let observedVideoId = self.normalizedPlaybackVideoId(observedVideoId),
               let currentQueueSong = self.queue[safe: self.currentIndex],
               currentQueueSong.videoId != observedVideoId
         else {
@@ -432,7 +427,7 @@ extension PlayerService {
             self.markPlaybackEnded()
             return
         }
-        if let observedVideoId = self.normalizedObservedVideoId(observedVideoId) {
+        if let observedVideoId = self.normalizedPlaybackVideoId(observedVideoId) {
             let currentQueueVideoId = self.queue[safe: self.currentIndex]?.videoId
             let expectedCurrentVideoId = currentQueueVideoId ?? self.currentTrack?.videoId ?? self.pendingPlayVideoId
             if let expectedCurrentVideoId, expectedCurrentVideoId != observedVideoId {
@@ -546,7 +541,7 @@ extension PlayerService {
             title: title,
             artists: [artistObj],
             album: nil,
-            duration: self.duration > 0 ? self.duration : nil,
+            duration: self.observedDuration(for: resolvedVideoId),
             thumbnailURL: thumbnailURL,
             videoId: resolvedVideoId
         )
