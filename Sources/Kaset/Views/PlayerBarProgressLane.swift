@@ -152,7 +152,7 @@ struct PlayerBarProgressLane: View {
                     )
                     .opacity(self.canSeek ? 1 : 0)
 
-                if let segment = self.hoveredSegment, !self.isLoading, !self.isLive {
+                if let segment = self.hoveredSegment, self.segments.contains(segment), !self.isLoading, !self.isLive {
                     self.segmentTooltip(segment)
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { self.tooltipSize = $0 }
                         .offset(
@@ -169,6 +169,7 @@ struct PlayerBarProgressLane: View {
             .animation(PlayerBarSliderVisuals.thumbAnimation, value: self.isHovering)
             .animation(.easeInOut(duration: 0.18), value: self.isLoading)
             .animation(.easeOut(duration: 0.14), value: self.hoveredSegment)
+            .onChange(of: self.segments) { self.hoveredSegment = nil }
             .padding(PlayerBarSliderVisuals.hitOutset)
             .contentShape(Rectangle())
             .gesture(
