@@ -241,7 +241,12 @@ struct ScrobblingCoordinatorMixPlaybackTests {
         playerService.progress = 50
         try await Task.sleep(for: .milliseconds(20))
         await parseGate.open()
-        await self.waitUntil { mockYouTube.getWatchNextCompletionCount == 1 }
+        await self.waitUntil {
+            if case .mix = coordinator.mixDetectionState {
+                return true
+            }
+            return false
+        }
 
         playerService.progress = 51
         try await Task.sleep(for: .milliseconds(50))
