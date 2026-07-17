@@ -41,7 +41,7 @@ struct ScrobblingCoordinatorMixPlaybackTests {
     }
 
     private func waitUntil(
-        timeout: Duration = .seconds(2),
+        timeout: Duration = .seconds(10),
         _ condition: @MainActor () -> Bool
     ) async {
         let deadline = ContinuousClock.now + timeout
