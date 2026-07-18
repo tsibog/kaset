@@ -146,15 +146,16 @@ struct KasetApp: App {
         _notificationService = State(initialValue: NotificationService(playerService: player))
         _accountService = State(initialValue: account)
 
-        // Shared now-playing tracklist provider: owns mix segmentation for the current item,
-        // driven by the player and consumed by both the seek bar and the scrobbler. Fetching is
-        // independent of scrobbling so segments show even without Last.fm connected.
+        // Playback-UI tracklist provider: owns seek-bar segmentation for the current item and is
+        // driven by the player, so segments show even without Last.fm connected. Scrobbling keeps
+        // its provisional classification state but shares the same cached/coalescing parser.
         let mixTracklistParser = MixTracklistParser(youTubeClient: youtubeClient)
         let tracklistProvider = NowPlayingTracklistProvider(parser: mixTracklistParser)
         player.setNowPlayingTracklistProvider(tracklistProvider)
         _nowPlayingTracklistProvider = State(initialValue: tracklistProvider)
 
-        // Create scrobbling coordinator; it shares the mix tracklist parser with the seek bar.
+        // Create the scrobbling coordinator with the shared parser. Its classification lifecycle is
+        // intentionally independent from the current-item UI provider.
         let lastFMService = LastFMService(credentialStore: KeychainCredentialStore())
         let scrobblingCoordinator = ScrobblingCoordinator(
             playerService: player,

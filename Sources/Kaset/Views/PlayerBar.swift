@@ -24,7 +24,7 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
     /// Namespace for glass effect morphing and unioning.
     @Namespace private var playerNamespace
 
-    /// Local seek value for smooth slider dragging without network calls on every change.
+    /// Local normalized seek fraction (0...1) for smooth dragging; `performSeek` converts to seconds.
     @State private var seekValue: Double = 0
     @State private var isSeeking = false
     @State private var seekHold = PlayerBarSeekHold()
@@ -482,6 +482,10 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
 
     private var progressActionButtons: some View {
         HStack(spacing: 6) {
+            if !self.progressSegments.isEmpty {
+                self.mixTracksMenu
+            }
+
             PlayerBarIconButton(
                 action: self.showAirPlayPicker,
                 isSelected: self.playerService.isAirPlayConnected,
@@ -595,6 +599,31 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
         }
     }
 
+    private var mixTracksMenu: some View {
+        PlayerBarIconMenu(
+            accessibilityID: AccessibilityID.PlayerBar.mixTracksButton,
+            accessibilityLabel: String(localized: "Mix tracks")
+        ) {
+            ForEach(self.progressSegments) { segment in
+                Button {
+                    self.seek(to: segment)
+                } label: {
+                    if segment.id == self.currentProgressSegment?.id {
+                        Label(segment.accessibilityDescription, systemImage: "checkmark")
+                    } else {
+                        Text(segment.accessibilityDescription)
+                    }
+                }
+                .disabled(!self.canSeek)
+            }
+        } icon: {
+            Image(systemName: "list.number")
+                .font(.system(size: 16, weight: .regular))
+                .frame(width: 16, height: 16)
+                .foregroundStyle(.primary)
+        }
+    }
+
     private var volumeOverlay: some View {
         CompatGlassContainer(spacing: 0) {
             VStack(spacing: 10) {
@@ -686,6 +715,10 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
         }
         guard self.playerService.duration > 0 else { return 0 }
         return min(max(0, self.displayedPlaybackProgress / self.playerService.duration), 1)
+    }
+
+    private var currentProgressSegment: PlayerBarProgressSegment? {
+        PlayerBarProgressLane.segment(at: self.displayFraction, in: self.progressSegments)
     }
 
     private var displayedPlaybackProgress: TimeInterval {
@@ -1214,6 +1247,14 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
                 )
             }
         }
+    }
+
+    private func seek(to segment: PlayerBarProgressSegment) {
+        guard self.canSeek else { return }
+        self.isSeeking = true
+        // Segment boundaries and `seekValue` use the same normalized 0...1 coordinate space.
+        self.seekValue = segment.start
+        self.performSeek()
     }
 
     private func clearSeekHold() {

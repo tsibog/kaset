@@ -13,10 +13,11 @@ scrobbling-private detail: it drove per-sub-track scrobbles and only ran when a
 scrobble service (Last.fm) was connected.
 
 The segmented seek bar — a YouTube-style progress lane that splits into one
-segment per sub-track — needs the same per-sub-track data, independent of
-scrobbling. Re-parsing inside the view layer would duplicate network fetches,
-risk the two consumers diverging on "is this a mix / what are its sub-tracks",
-and couple a pure-playback UI feature to the scrobbling subsystem.
+segment per sub-track — needs the same parsed per-sub-track data, independent
+of scrobbling. Re-parsing inside the view layer would duplicate network
+fetches and couple a pure-playback UI feature to the scrobbling subsystem.
+The scrobbler still needs its own classification lifecycle for unknown-duration
+fallbacks, provisional playback credit, timeouts, and post-exit finalization.
 
 There is also a timing hazard: YouTube reports a video's duration a beat after
 the track object appears, and a duration value can briefly leak across a video
@@ -27,9 +28,10 @@ mis-segmented.
 
 ## Decision
 
-Extract tracklist ownership into a dedicated `@MainActor @Observable`
-`NowPlayingTracklistProvider` in the Player layer, as the single source of truth
-for "what are the sub-tracks of the now-playing video."
+Extract current-item playback-UI tracklist ownership into a dedicated
+`@MainActor @Observable` `NowPlayingTracklistProvider` in the Player layer. It
+is the segmented seek bar's source of truth for "what are the sub-tracks of the
+now-playing video."
 
 - The provider is **driven** by `PlayerService` (`update(track:duration:)` on
   every track/duration change) but owns all fetch policy: a once-per-video latch,
@@ -37,11 +39,13 @@ for "what are the sub-tracks of the now-playing video."
   changes.
 - It is **decoupled from scrobbling**: the fetch runs regardless of whether a
   scrobble service is connected, because mix segmentation is a playback concern.
-- Both consumers read the same provider — the segmented seek bar
-  (`PlayerBar` → `PlayerBarProgressLane`) always, and `ScrobblingCoordinator`
-  when connected.
-- A single `MixTracklistParser` (with in-flight fetch coalescing) is shared
-  between the provider and the coordinator, wired once in `KasetApp`.
+- The segmented seek bar (`PlayerBar` → `PlayerBarProgressLane`) consumes the
+  provider. `ScrobblingCoordinator` intentionally retains its own detection
+  state machine because it must preserve provisional credit, resolve unknown
+  durations, enforce parse timeouts, and finalize tracks after playback exits.
+- A single `MixTracklistParser` (with cache and waiter-aware in-flight fetch
+  coalescing) is shared between the provider and the coordinator, wired once in
+  `KasetApp`. They share parsed data and network work, not classification state.
 - Duration is provenance-correlated to its originating video so the mix gate
   cannot be tripped by a duration belonging to a different track.
 
@@ -49,8 +53,10 @@ for "what are the sub-tracks of the now-playing video."
 
 Easier:
 
-- One source of truth; the seek bar and the scrobbler cannot disagree about the
-  now-playing tracklist.
+- One current-item source for seek-bar segmentation, while the scrobbler keeps
+  the richer lifecycle needed for accounting and finalization.
+- Shared parser results prevent duplicate network work and keep both consumers
+  on the same parsed chapter/description payload when they request a video.
 - Segmentation works with scrobbling off; the UI feature no longer depends on
   Last.fm being connected.
 - Coalesced parsing means the two consumers requesting the same video share a
@@ -61,8 +67,11 @@ Easier:
 More difficult / to watch:
 
 - Adds a shared observable service to the Player layer whose lifecycle and
-  ownership must be managed (a single instance in `KasetApp`, injected into both
-  the player and the coordinator).
+  ownership must be managed (a single instance in `KasetApp`, injected into the
+  player and view hierarchy).
+- Provider and scrobbler can resolve classification at different times or under
+  different duration-evidence rules; their responsibilities must remain clearly
+  documented even though they share the parser.
 - The once-per-video latch, duration gate, and provenance correlation are subtle;
   the race between duration settling and the mix gate is guarded by
   `NowPlayingTracklistProviderTests` and must stay covered when the drive path

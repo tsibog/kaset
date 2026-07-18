@@ -3,9 +3,10 @@ import Foundation
 // MARK: - NowPlayingTracklistProvider
 
 /// Owns the sub-track breakdown (a `MixTracklist`) of the currently-playing item and the machinery
-/// that fetches it. This is the single source of truth for "what are the sub-tracks of the now
-/// playing video", consumed by both the segmented seek bar (always) and the `ScrobblingCoordinator`
-/// (when a scrobble service is connected).
+/// that fetches it for playback UI. It is the segmented seek bar's source of truth for "what are the
+/// sub-tracks of the now-playing video." `ScrobblingCoordinator` retains a separate classification
+/// state machine for provisional credit, timeouts, and post-exit finalization; both consumers share
+/// the cached, in-flight-coalescing `MixTracklistParser`.
 ///
 /// It is deliberately decoupled from scrobbling: mix segmentation is a playback concern, so the
 /// fetch runs regardless of whether Last.fm is connected. The provider is *driven* — `PlayerService`

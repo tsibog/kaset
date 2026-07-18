@@ -29,6 +29,10 @@ struct PlayerBarProgressLane: View {
         CGFloat(min(max(0, self.fraction), 1))
     }
 
+    private var currentSegment: PlayerBarProgressSegment? {
+        Self.segment(at: self.fraction, in: self.segments)
+    }
+
     init(
         fraction: Double,
         accent: Color,
@@ -78,7 +82,7 @@ struct PlayerBarProgressLane: View {
         .frame(height: 30)
         .accessibilityElement()
         .accessibilityLabel(String(localized: "Playback position"))
-        .accessibilityValue(self.isLive ? String(localized: "Live stream") : "\(self.elapsedText), \(self.remainingText)")
+        .accessibilityValue(self.accessibilityValue)
         .accessibilityAdjustableAction { direction in
             guard self.canSeek else { return }
             switch direction {
@@ -240,7 +244,7 @@ struct PlayerBarProgressLane: View {
     /// The segment whose `[start, end)` span contains the given progress fraction, or nil when the
     /// fraction falls in a gap or outro past the last segment's end.
     private func segment(at fraction: Double) -> PlayerBarProgressSegment? {
-        self.segments.last { $0.contains(fraction) }
+        Self.segment(at: fraction, in: self.segments)
     }
 
     // MARK: - Segmented Track
@@ -253,47 +257,106 @@ struct PlayerBarProgressLane: View {
         max(0, trackWidth - self.segmentTooltipHorizontalPadding * 2)
     }
 
+    static func segment(
+        at fraction: Double,
+        in segments: [PlayerBarProgressSegment]
+    ) -> PlayerBarProgressSegment? {
+        segments.last { $0.contains(fraction) }
+    }
+
+    static func playedFraction(
+        at progress: Double,
+        within segment: PlayerBarProgressSegment
+    ) -> CGFloat {
+        let span = segment.end - segment.start
+        guard span > 0 else { return 0 }
+        let progressed = (progress - segment.start) / span
+        return CGFloat(min(max(0, progressed), 1))
+    }
+
+    static func geometry(
+        for segment: PlayerBarProgressSegment,
+        trackWidth: CGFloat,
+        gap: CGFloat
+    ) -> PlayerBarProgressSegmentGeometry {
+        let span = segment.end - segment.start
+        guard span > 0, trackWidth > 0 else {
+            return PlayerBarProgressSegmentGeometry(x: CGFloat(segment.start) * trackWidth, width: 0)
+        }
+
+        let rawX = CGFloat(segment.start) * trackWidth
+        let rawWidth = CGFloat(span) * trackWidth
+        let leftGap: CGFloat = segment.index == 0 ? 0 : gap / 2
+        let rightGap: CGFloat = segment.index == segment.count - 1 ? 0 : gap / 2
+        return PlayerBarProgressSegmentGeometry(
+            x: rawX + leftGap,
+            width: max(1, rawWidth - leftGap - rightGap)
+        )
+    }
+
+    static func isProminent(
+        segmentID: String,
+        currentSegmentID: String?,
+        hoveredSegmentID: String?
+    ) -> Bool {
+        segmentID == currentSegmentID || segmentID == hoveredSegmentID
+    }
+
+    static func accessibilityValue(
+        isLive: Bool,
+        elapsedText: String,
+        remainingText: String,
+        currentSegment: PlayerBarProgressSegment?
+    ) -> String {
+        let playbackValue = isLive ? String(localized: "Live stream") : "\(elapsedText), \(remainingText)"
+        guard !isLive, let currentSegment else { return playbackValue }
+        return "\(playbackValue). \(String(localized: "Now Playing")): \(currentSegment.accessibilityDescription)"
+    }
+
     @ViewBuilder
     private func segmentedTrack(width: CGFloat, fillColor: Color) -> some View {
         let gap = Self.segmentGap
+        let progress = Double(self.clampedFraction)
+        let currentSegmentID = Self.segment(at: progress, in: self.segments)?.id
         ZStack(alignment: .topLeading) {
             ForEach(self.segments) { segment in
-                let rawX = CGFloat(segment.start) * width
-                let rawWidth = CGFloat(segment.end - segment.start) * width
-                let leftGap: CGFloat = segment.index == 0 ? 0 : gap / 2
-                let rightGap: CGFloat = segment.index == segment.count - 1 ? 0 : gap / 2
-                let pieceWidth = max(1, rawWidth - leftGap - rightGap)
-                let within = self.playedFraction(within: segment)
-                let isHovered = segment.id == self.hoveredSegment?.id
+                let geometry = Self.geometry(for: segment, trackWidth: width, gap: gap)
+                let within = Self.playedFraction(at: progress, within: segment)
+                let isProminent = Self.isProminent(
+                    segmentID: segment.id,
+                    currentSegmentID: currentSegmentID,
+                    hoveredSegmentID: self.hoveredSegment?.id
+                )
 
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(isHovered ? self.hoveredSegmentTrackColor : self.trackColor)
-                        .frame(width: pieceWidth, height: PlayerBarSliderVisuals.trackThickness)
+                        .fill(isProminent ? self.prominentSegmentTrackColor : self.trackColor)
+                        .frame(width: geometry.width, height: PlayerBarSliderVisuals.trackThickness)
 
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
                         .fill(fillColor)
-                        .frame(width: pieceWidth * within, height: PlayerBarSliderVisuals.trackThickness)
+                        .frame(width: geometry.width * within, height: PlayerBarSliderVisuals.trackThickness)
                         .opacity(self.isLive ? 0 : 1)
                 }
-                .frame(width: pieceWidth, alignment: .leading)
-                .scaleEffect(y: isHovered ? 2.0 : 1, anchor: .center)
-                .offset(x: rawX + leftGap)
-                .animation(PlayerBarSliderVisuals.thumbAnimation, value: isHovered)
+                .frame(width: geometry.width, alignment: .leading)
+                .scaleEffect(y: isProminent ? 2.0 : 1, anchor: .center)
+                .offset(x: geometry.x)
+                .animation(PlayerBarSliderVisuals.thumbAnimation, value: isProminent)
             }
         }
     }
 
-    /// How far playback has progressed through a segment, 0...1.
-    private func playedFraction(within segment: PlayerBarProgressSegment) -> CGFloat {
-        let span = segment.end - segment.start
-        guard span > 0 else { return 0 }
-        let progressed = (Double(self.clampedFraction) - segment.start) / span
-        return CGFloat(min(max(0, progressed), 1))
+    private var prominentSegmentTrackColor: Color {
+        self.colorScheme == .dark ? .white.opacity(0.34) : .black.opacity(0.30)
     }
 
-    private var hoveredSegmentTrackColor: Color {
-        self.colorScheme == .dark ? .white.opacity(0.34) : .black.opacity(0.30)
+    private var accessibilityValue: String {
+        Self.accessibilityValue(
+            isLive: self.isLive,
+            elapsedText: self.elapsedText,
+            remainingText: self.remainingText,
+            currentSegment: self.currentSegment
+        )
     }
 
     // MARK: - Segment Tooltip
@@ -462,6 +525,13 @@ struct PlayerBarProgressMarker: Identifiable, Hashable {
     }
 }
 
+// MARK: - PlayerBarProgressSegmentGeometry
+
+struct PlayerBarProgressSegmentGeometry: Equatable {
+    let x: CGFloat
+    let width: CGFloat
+}
+
 // MARK: - PlayerBarProgressSegment
 
 /// A contiguous span of the seek bar corresponding to one sub-track of a mix. When a lane is given
@@ -500,5 +570,16 @@ struct PlayerBarProgressSegment: Identifiable, Hashable {
     /// Whether the given progress fraction falls within this segment.
     func contains(_ fraction: Double) -> Bool {
         fraction >= self.start && fraction < self.end
+    }
+
+    var accessibilityDescription: String {
+        var components = ["\(String(localized: "Track")) \(self.index + 1)/\(self.count)", self.title]
+        if let subtitle = self.subtitle, !subtitle.isEmpty {
+            components.append(subtitle)
+        }
+        if !self.rangeText.isEmpty {
+            components.append(self.rangeText)
+        }
+        return components.joined(separator: ", ")
     }
 }
