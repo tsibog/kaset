@@ -71,6 +71,32 @@ struct PlayerBarProgressLaneTests {
             title: "Invalid"
         )
         #expect(PlayerBarProgressLane.geometry(for: invalid, trackWidth: 120, gap: 3).width == 0)
+
+        let tinyFinal = PlayerBarProgressSegment(
+            id: "tiny-final",
+            start: 0.999,
+            end: 1,
+            index: 2,
+            count: 3,
+            title: "Tiny final"
+        )
+        let tinyFinalGeometry = PlayerBarProgressLane.geometry(for: tinyFinal, trackWidth: 120, gap: 3)
+        #expect(tinyFinalGeometry.width <= 0.1201)
+        #expect(tinyFinalGeometry.x >= 119.88)
+        #expect(tinyFinalGeometry.x + tinyFinalGeometry.width <= 120.0001)
+
+        let narrowMiddle = PlayerBarProgressSegment(
+            id: "narrow-middle",
+            start: 0.5,
+            end: 0.5 + 2.0 / 120,
+            index: 1,
+            count: 3,
+            title: "Narrow middle"
+        )
+        let narrowMiddleGeometry = PlayerBarProgressLane.geometry(for: narrowMiddle, trackWidth: 120, gap: 3)
+        #expect(abs(narrowMiddleGeometry.width - 1) < 0.0001)
+        #expect(narrowMiddleGeometry.x >= 60)
+        #expect(narrowMiddleGeometry.x + narrowMiddleGeometry.width <= 62.0001)
     }
 
     @Test("Current and hovered segments are independently prominent")

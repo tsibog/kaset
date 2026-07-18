@@ -286,11 +286,17 @@ struct PlayerBarProgressLane: View {
 
         let rawX = CGFloat(segment.start) * trackWidth
         let rawWidth = CGFloat(span) * trackWidth
-        let leftGap: CGFloat = segment.index == 0 ? 0 : gap / 2
-        let rightGap: CGFloat = segment.index == segment.count - 1 ? 0 : gap / 2
+        let desiredLeftGap: CGFloat = segment.index == 0 ? 0 : gap / 2
+        let desiredRightGap: CGFloat = segment.index == segment.count - 1 ? 0 : gap / 2
+        let desiredGap = desiredLeftGap + desiredRightGap
+        let minimumVisibleWidth = min(1, rawWidth)
+        let availableGap = min(desiredGap, max(0, rawWidth - minimumVisibleWidth))
+        let gapScale = desiredGap > 0 ? availableGap / desiredGap : 0
+        let leftGap = desiredLeftGap * gapScale
+        let rightGap = desiredRightGap * gapScale
         return PlayerBarProgressSegmentGeometry(
             x: rawX + leftGap,
-            width: max(1, rawWidth - leftGap - rightGap)
+            width: rawWidth - leftGap - rightGap
         )
     }
 
