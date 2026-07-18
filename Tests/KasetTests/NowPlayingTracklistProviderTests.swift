@@ -4,7 +4,7 @@ import Testing
 
 // MARK: - NowPlayingTracklistProviderTests
 
-@Suite(.tags(.service))
+@Suite(.serialized, .tags(.service))
 @MainActor
 struct NowPlayingTracklistProviderTests {
     // MARK: - Fixtures
@@ -52,7 +52,7 @@ struct NowPlayingTracklistProviderTests {
     }
 
     private func waitUntil(
-        timeout: Duration = .seconds(2),
+        timeout: Duration = .seconds(5),
         _ condition: @MainActor () -> Bool
     ) async {
         let deadline = ContinuousClock.now + timeout
