@@ -515,19 +515,7 @@ extension PlayerServiceQueueTests {
 
     @Test("Pause during undo metadata preserves structural finalization")
     func pauseDuringUndoMetadataPreservesStructuralFinalization() async {
-        let settings = SettingsManager.shared
-        let savedAhead = settings.smartShuffleSuggestionsAhead
-        let savedEveryN = settings.smartShuffleSuggestEveryN
-        let savedBurst = settings.smartShuffleBurst
         self.playerService.smartShuffleFeatureEnabled = { true }
-        settings.smartShuffleSuggestionsAhead = 1
-        settings.smartShuffleSuggestEveryN = 1
-        settings.smartShuffleBurst = 1
-        defer {
-            settings.smartShuffleSuggestionsAhead = savedAhead
-            settings.smartShuffleSuggestEveryN = savedEveryN
-            settings.smartShuffleBurst = savedBurst
-        }
 
         let restored = Song(
             id: "pause-undo-restored",
@@ -545,7 +533,10 @@ extension PlayerServiceQueueTests {
             videoId: "pause-undo-replacement",
             feedbackTokens: FeedbackTokens(add: "replacement-add", remove: "replacement-remove")
         )
-        await self.playerService.playQueue([restored], startingAt: 0)
+        let restoredQueue = [restored] + (1 ... SettingsManager.smartShuffleSuggestEveryNRange.upperBound).map { index in
+            TestFixtures.makeSong(id: "pause-undo-filler-\(index)")
+        }
+        await self.playerService.playQueue(restoredQueue, startingAt: 0)
         self.playerService.shuffleMode = .smart
         let smartState = self.playerService.makeQueueStateSnapshot()
         self.playerService.shuffleMode = .off
@@ -560,9 +551,10 @@ extension PlayerServiceQueueTests {
             videoId: restored.videoId,
             feedbackTokens: FeedbackTokens(add: "new-add", remove: "new-remove")
         )
-        self.mockClient.radioQueueSongs[restored.videoId] = [
-            TestFixtures.makeSong(id: "pause-undo-suggestion"),
-        ]
+        let suggestion = TestFixtures.makeSong(id: "pause-undo-suggestion")
+        for song in restoredQueue {
+            self.mockClient.radioQueueSongs[song.videoId] = [suggestion]
+        }
         let metadataStarted = AsyncGate()
         let releaseMetadata = AsyncGate()
         self.mockClient.beforeGetSongReturn = { videoID in

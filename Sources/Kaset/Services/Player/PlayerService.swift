@@ -140,7 +140,7 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     var duration: TimeInterval = 0 {
         didSet {
             guard !self.isApplyingPlaybackStateObservation else { return }
-            self.recordDurationObservation(videoId: self.playbackStateVideoId, duration: self.duration)
+            self.driveNowPlayingTracklistProvider()
         }
     }
 

@@ -153,7 +153,7 @@ struct PlayerBarProgressLane: View {
                     .opacity(self.canSeek ? 1 : 0)
 
                 if let segment = self.hoveredSegment, self.segments.contains(segment), !self.isLoading, !self.isLive {
-                    self.segmentTooltip(segment)
+                    self.segmentTooltip(segment, trackWidth: width)
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { self.tooltipSize = $0 }
                         .offset(
                             x: self.tooltipLeadingX(segment, width: width),
@@ -247,6 +247,11 @@ struct PlayerBarProgressLane: View {
 
     /// Gap between adjacent segment pieces, in points. Split across the shared edge.
     private static let segmentGap: CGFloat = 3
+    private static let segmentTooltipHorizontalPadding: CGFloat = 11
+
+    static func segmentTooltipContentMaxWidth(trackWidth: CGFloat) -> CGFloat {
+        max(0, trackWidth - self.segmentTooltipHorizontalPadding * 2)
+    }
 
     @ViewBuilder
     private func segmentedTrack(width: CGFloat, fillColor: Color) -> some View {
@@ -293,7 +298,7 @@ struct PlayerBarProgressLane: View {
 
     // MARK: - Segment Tooltip
 
-    private func segmentTooltip(_ segment: PlayerBarProgressSegment) -> some View {
+    private func segmentTooltip(_ segment: PlayerBarProgressSegment, trackWidth: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(segment.title)
                 .font(.system(size: 12, weight: .semibold))
@@ -313,8 +318,9 @@ struct PlayerBarProgressLane: View {
                 .monospacedDigit()
                 .lineLimit(1)
         }
-        .fixedSize()
-        .padding(.horizontal, 11)
+        .frame(maxWidth: Self.segmentTooltipContentMaxWidth(trackWidth: trackWidth), alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, Self.segmentTooltipHorizontalPadding)
         .padding(.vertical, 7)
         .background {
             RoundedRectangle(cornerRadius: 9, style: .continuous)

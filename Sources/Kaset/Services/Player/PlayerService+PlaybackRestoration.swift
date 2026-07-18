@@ -215,6 +215,7 @@ extension PlayerService {
         self.progress = targetProgress
         self.currentTimeMs = Int(targetProgress * 1000)
         self.duration = resolvedDuration
+        self.recordDurationObservation(videoId: self.currentTrack?.videoId, duration: resolvedDuration)
         self.pendingRestoredSeek = targetProgress
         self.isRestoringPlaybackSession = true
         self.shouldAutoResumeAfterRestoredLoad = !startsPaused

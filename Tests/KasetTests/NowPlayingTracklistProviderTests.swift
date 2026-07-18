@@ -144,20 +144,19 @@ struct NowPlayingTracklistProviderTests {
         // A: mix1's fetch is held in-flight.
         provider.update(track: TestFixtures.makeSong(id: "mix1", duration: 3600), duration: 3600)
         await self.waitUntil { mockYouTube.getWatchNextCallCount == 1 }
-        // B: switch to mix2, cancelling A's provider-side parse (its parser fetch stays in-flight).
+        // B: switch to mix2, cancelling and removing A's now-unobserved parser request.
         provider.update(track: TestFixtures.makeSong(id: "mix2", duration: 3600), duration: 3600)
         await self.waitUntil { mockYouTube.getWatchNextCallCount == 2 }
-        // A again: switching back coalesces onto mix1's still in-flight fetch — no third call.
+        // A again: switching back must start a fresh mix1 request instead of joining cancelled work.
         provider.update(track: TestFixtures.makeSong(id: "mix1", duration: 3600), duration: 3600)
-        await self.waitUntil { provider.isParsing }
-        #expect(mockYouTube.getWatchNextCallCount == 2)
+        await self.waitUntil { mockYouTube.getWatchNextCallCount == 3 }
 
-        // Releasing mix1 resumes both the cancelled original and the current parse off the one fetch.
+        // Releasing mix1 resumes both the cancelled original and the current replacement request.
         // The current (replacement) generation must win; the stale one must not clear it.
         await mix1Gate.open()
         await self.waitUntil { provider.tracklist != nil }
         #expect(provider.tracklist?.videoId == "mix1")
-        #expect(mockYouTube.getWatchNextCallCount == 2)
+        #expect(mockYouTube.getWatchNextCallCount == 3)
     }
 
     @Test("Invalid placeholder video IDs never start a parse")
@@ -222,8 +221,7 @@ struct NowPlayingTracklistProviderTests {
         player.setNowPlayingTracklistProvider(provider)
 
         player.currentTrack = TestFixtures.makeSong(id: "mix1", title: "Long Mix", duration: nil)
-        player.setPlaybackStateVideoId("mix1")
-        player.duration = 3600
+        player.updatePlaybackState(isPlaying: false, progress: 0, duration: 3600, observedVideoId: "mix1")
 
         await self.waitUntil { provider.tracklist != nil }
         #expect(provider.tracklist?.isMix == true)
@@ -240,8 +238,7 @@ struct NowPlayingTracklistProviderTests {
 
         // A long mix is playing and the bridge has confirmed its duration → fetch fires.
         player.currentTrack = TestFixtures.makeSong(id: "mix1", title: "Long Mix", duration: nil)
-        player.setPlaybackStateVideoId("mix1")
-        player.duration = 3600
+        player.updatePlaybackState(isPlaying: false, progress: 0, duration: 3600, observedVideoId: "mix1")
         await self.waitUntil { mockYouTube.getWatchNextCallCount == 1 }
 
         // Switch to a short track before the bridge reports it: duration still holds 3600 and
@@ -308,6 +305,27 @@ struct NowPlayingTracklistProviderTests {
         await self.waitUntil(timeout: .milliseconds(200)) { mockYouTube.getWatchNextCallCount > 0 }
 
         #expect(mockYouTube.getWatchNextCallCount == 0)
+    }
+
+    @Test("Native playback setup does not retag the previous media duration")
+    func nativePlaybackSetupDoesNotRetagPreviousMediaDuration() async {
+        let player = PlayerService()
+        let previous = TestFixtures.makeSong(id: "previous-short", duration: 120)
+        player.currentTrack = previous
+        player.recordPlaybackStateObservation(videoId: previous.videoId, duration: 120)
+
+        let next = TestFixtures.makeSong(id: "next-long", duration: 3600)
+        let intent = player.beginMusicPlaybackIntent()
+        await player.play(
+            song: next,
+            webLoadStrategy: .standard,
+            queueEntryID: nil,
+            fetchesMetadata: false,
+            intent: intent
+        )
+
+        #expect(player.observedDuration(for: previous.videoId) == 120)
+        #expect(player.bestKnownDuration(for: previous) == 120)
     }
 
     @Test("Nil empty and whitespace observations do not certify duration")
