@@ -180,13 +180,19 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
         return normalized
     }
 
+    /// Returns the authoritative correlated playback duration when available, otherwise the track's
+    /// positive metadata duration. A bridge observation must replace rather than merge with metadata:
+    /// a persisted `Song` can carry either a stale shorter or stale longer duration.
     func bestKnownDuration(for track: Song?) -> TimeInterval {
         guard let track else { return 0 }
-        let trackDuration = track.duration.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 0
-        guard let durationObservation, durationObservation.videoId == track.videoId else {
-            return trackDuration
+        if let durationObservation, durationObservation.videoId == track.videoId {
+            return durationObservation.duration
         }
-        return max(trackDuration, durationObservation.duration)
+        return self.positiveMetadataDuration(for: track)
+    }
+
+    func positiveMetadataDuration(for track: Song?) -> TimeInterval {
+        track?.duration.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 0
     }
 
     func observedDuration(for videoId: String) -> TimeInterval? {
@@ -202,9 +208,15 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     }
 
     private func driveNowPlayingTracklistProvider() {
+        // Mix detection is a one-way fetch latch, so only a duration observed with this physical
+        // video identity may cross its gate. Track metadata remains a safe fallback for persistence,
+        // where it can still be corrected before being acted upon.
+        let observedDuration = self.currentTrack.flatMap {
+            self.observedDuration(for: $0.videoId)
+        } ?? 0
         self.nowPlayingTracklistProvider?.update(
             track: self.currentTrack,
-            duration: self.bestKnownDuration(for: self.currentTrack)
+            duration: observedDuration
         )
     }
 

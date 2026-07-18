@@ -10,17 +10,18 @@ import Foundation
 ///
 /// It is deliberately decoupled from scrobbling: mix segmentation is a playback concern, so the
 /// fetch runs regardless of whether Last.fm is connected. The provider is *driven* — `PlayerService`
-/// calls `update(track:duration:)` whenever the current track or its duration changes — but owns all
-/// the fetch policy: the once-per-video latch and the duration gate that together resolve the race
-/// where YouTube reports a track's duration a beat after the track object appears.
+/// calls `update(track:duration:)` whenever the current track or its correlated playback duration
+/// changes — but owns all the fetch policy: the once-per-video latch and the duration gate that
+/// together resolve the race where YouTube reports a track's duration a beat after the track object
+/// appears.
 @MainActor
 @Observable
 final class NowPlayingTracklistProvider {
     /// The tracklist for the currently-playing item, or nil when it isn't a mix (or isn't known yet).
     private(set) var tracklist: MixTracklist?
 
-    /// Minimum known duration before attempting a tracklist fetch: below this a video can't be a mix
-    /// worth segmenting. Matches the scrobbler's mix-detection floor.
+    /// Minimum correlated playback duration before attempting a tracklist fetch: below this a video
+    /// can't be a mix worth segmenting. Matches the scrobbler's mix-detection floor.
     private static let minMixDuration: TimeInterval = 600
 
     private let parser: MixTracklistParser?
@@ -59,9 +60,9 @@ final class NowPlayingTracklistProvider {
     }
 
     /// Drive the provider from playback observation. Idempotent and cheap: it resets on a video
-    /// change, then attempts the fetch once the best-known duration crosses the mix threshold. Safe
-    /// to call on every track/duration mutation — once a fetch has been attempted for a video it
-    /// returns immediately.
+    /// change, then attempts the fetch once the correlated observed duration crosses the mix
+    /// threshold. Safe to call on every track/duration mutation — once a fetch has been attempted for
+    /// a video it returns immediately.
     func update(track: Song?, duration: TimeInterval) {
         guard let track else {
             self.reset(to: nil)

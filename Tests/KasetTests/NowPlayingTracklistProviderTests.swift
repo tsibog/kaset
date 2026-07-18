@@ -341,6 +341,41 @@ struct NowPlayingTracklistProviderTests {
         #expect(provider.tracklist == nil)
     }
 
+    @Test("Stale long track metadata cannot cross the mix gate before playback confirms duration")
+    func staleLongTrackDurationDoesNotCrossMixGate() async {
+        let (provider, mockYouTube) = self.makeProvider(chapters: self.makeMixChapters())
+        let player = PlayerService()
+        player.setNowPlayingTracklistProvider(provider)
+
+        // A Song can outlive a stale persisted/API duration. Metadata alone must not launch the
+        // mix parse because a later bridge observation may prove that this video is actually short.
+        player.currentTrack = TestFixtures.makeSong(id: "short1", duration: 3600)
+        await self.waitUntil(timeout: .milliseconds(200)) { mockYouTube.getWatchNextCallCount > 0 }
+        #expect(mockYouTube.getWatchNextCallCount == 0)
+
+        player.updatePlaybackState(
+            isPlaying: true,
+            progress: 0,
+            duration: 240,
+            observedVideoId: "short1"
+        )
+        await self.waitUntil(timeout: .milliseconds(200)) { mockYouTube.getWatchNextCallCount > 0 }
+
+        #expect(player.bestKnownDuration(for: player.currentTrack) == 240)
+        #expect(mockYouTube.getWatchNextCallCount == 0)
+        #expect(provider.tracklist == nil)
+
+        // A later correlated long duration still re-drives the provider normally.
+        player.updatePlaybackState(
+            isPlaying: true,
+            progress: 0,
+            duration: 3600,
+            observedVideoId: "short1"
+        )
+        await self.waitUntil { mockYouTube.getWatchNextCallCount == 1 }
+        #expect(provider.tracklist?.isMix == true)
+    }
+
     @Test("A matching zero observation cannot certify a mismatched long duration")
     func matchingZeroObservationDoesNotCertifyMismatchedDuration() async {
         let (provider, mockYouTube) = self.makeProvider(chapters: self.makeMixChapters())

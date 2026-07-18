@@ -46,8 +46,9 @@ now-playing video."
 - A single `MixTracklistParser` (with cache and waiter-aware in-flight fetch
   coalescing) is shared between the provider and the coordinator, wired once in
   `KasetApp`. They share parsed data and network work, not classification state.
-- Duration is provenance-correlated to its originating video so the mix gate
-  cannot be tripped by a duration belonging to a different track.
+- Only duration observed with the current physical video identity may trip the
+  provider's irreversible mix gate; `Song.duration` remains fallback metadata
+  for reversible uses such as persistence.
 
 ## Consequences
 
