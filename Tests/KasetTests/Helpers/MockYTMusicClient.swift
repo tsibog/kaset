@@ -105,6 +105,8 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
     var artistSongs: [String: [Song]] = [:]
     var artistSongsResponse: [Song] = []
     var moodCategoryResponse: HomeResponse = .init(sections: [])
+    var moodCategoryResponses: [String: HomeResponse] = [:]
+    var moodCategoryError: Error?
     var lyricsResponses: [String: Lyrics] = [:]
     var radioQueueSongs: [String: [Song]] = [:]
     var songResponses: [String: Song] = [:]
@@ -297,6 +299,8 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
     private(set) var getRadioQueueCalled = false
     private(set) var getRadioQueueVideoIds: [String] = []
     private(set) var moodCategoryCalled = false
+    private(set) var moodCategoryBrowseIds: [String] = []
+    private(set) var moodCategoryParams: [String?] = []
 
     // MARK: - Error Simulation
 
@@ -1237,10 +1241,18 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
         return self.mixQueueContinuationResult
     }
 
-    func getMoodCategory(browseId _: String, params _: String?) async throws -> HomeResponse {
+    func getMoodCategory(browseId: String, params: String?) async throws -> HomeResponse {
         self.moodCategoryCalled = true
+        self.moodCategoryBrowseIds.append(browseId)
+        self.moodCategoryParams.append(params)
         if let error = shouldThrowError {
             throw error
+        }
+        if let moodCategoryError {
+            throw moodCategoryError
+        }
+        if let response = moodCategoryResponses[params ?? ""] {
+            return response
         }
         return self.moodCategoryResponse
     }
@@ -1366,6 +1378,8 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
         self.getRadioQueueCalled = false
         self.getRadioQueueVideoIds = []
         self.moodCategoryCalled = false
+        self.moodCategoryBrowseIds = []
+        self.moodCategoryParams = []
         self.shouldThrowError = nil
     }
 }
