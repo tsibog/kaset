@@ -1,4 +1,4 @@
-# ADR-0028: Shared Now-Playing Mix Tracklist Provider
+# ADR-0029: Shared Now-Playing Mix Tracklist Provider
 
 ## Status
 

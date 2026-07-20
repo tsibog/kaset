@@ -267,6 +267,7 @@ struct MainWindow: View { // swiftlint:disable:this type_body_length
         }
         .onChange(of: self.accountService.currentAccount?.id) { _, newAccountId in
             self.playerService.resetTrackStatus()
+            self.searchViewModel?.clear()
             self.podcastsViewModel?.configure(
                 availabilityService: self.podcastsAvailability,
                 accountId: newAccountId
@@ -377,20 +378,21 @@ struct MainWindow: View { // swiftlint:disable:this type_body_length
                 using: self.client
             )
         }
-        .onChange(of: self.likeStatusManager.lastLikeEvent) { _, event in
-            guard let event else { return }
+        .onChange(of: self.likeStatusManager.lastLikeEventBatch) { _, batch in
+            guard let batch, batch.accountID == self.likeStatusManager.activeAccountID else { return }
+            for event in batch.events {
+                // Global sync 1: keep PlayerService.currentTrackLikeStatus in sync
+                if let currentVideoId = self.playerService.currentTrack?.videoId,
+                   event.videoId == currentVideoId
+                {
+                    self.playerService.currentTrackLikeStatus = event.status
+                }
 
-            // Global sync 1: keep PlayerService.currentTrackLikeStatus in sync
-            if let currentVideoId = self.playerService.currentTrack?.videoId,
-               event.videoId == currentVideoId
-            {
-                self.playerService.currentTrackLikeStatus = event.status
-            }
-
-            // Global sync 2: keep Liked Music list in sync when the active
-            // Liked Music detail view is not already forwarding this event.
-            if self.navigationSelection != .likedMusic {
-                self.likedMusicViewModel?.handleLikeStatusChange(event)
+                // Global sync 2: keep Liked Music list in sync when the active
+                // Liked Music detail view is not already forwarding this event.
+                if self.navigationSelection != .likedMusic {
+                    self.likedMusicViewModel?.handleLikeStatusChange(event)
+                }
             }
         }
     }
