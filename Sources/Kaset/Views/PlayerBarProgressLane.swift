@@ -388,7 +388,9 @@ struct PlayerBarProgressLane: View {
                 .lineLimit(1)
         }
         .frame(maxWidth: Self.segmentTooltipContentMaxWidth(trackWidth: trackWidth), alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
+        // Ask the capped frame for its intrinsic width instead of accepting the seek bar's full
+        // proposal. Long labels still stop at the frame's maxWidth and truncate via lineLimit(1).
+        .fixedSize(horizontal: true, vertical: true)
         .padding(.horizontal, Self.segmentTooltipHorizontalPadding)
         .padding(.vertical, 7)
         .background {
